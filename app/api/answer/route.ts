@@ -1,7 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import Anthropic from "@anthropic-ai/sdk";
-
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 type Style = "interviewee" | "normal" | "structured";
 
@@ -13,7 +10,8 @@ const prompts: Record<Style,string> = {
 
 export async function POST(req:NextRequest){
   try {
-    if(!process.env.ANTHROPIC_API_KEY) return NextResponse.json({error:"ANTHROPIC_API_KEY is not configured on the server."},{status:500});
+    const apiKey = process.env.GEMINI_API_KEY;
+    if(!apiKey) return NextResponse.json({error:"GEMINI_API_KEY is not configured on the server."},{status:500});
     const body = await req.json();
     const question = String(body.question ?? "").trim();
     const style = (body.style ?? "interviewee") as Style;
@@ -23,13 +21,20 @@ export async function POST(req:NextRequest){
     if(!question) return NextResponse.json({error:"Question is required."},{status:400});
     const system = `You are an interview preparation assistant. Company: ${company}. Role: ${role}. Domain: ${domain}. ${prompts[style] || prompts.interviewee}
 Do not invent personal experience for the candidate. For behavioral questions, provide a polished adaptable answer that the candidate can personalize.`;
-    const response = await client.messages.create({
-      model: "claude-sonnet-4-5",
-      max_tokens: 1400,
-      system,
-      messages: [{role:"user", content: question}]
+    const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: system }] },
+        contents: [{ role: "user", parts: [{ text: question }] }],
+        generationConfig: { maxOutputTokens: 1400 },
+      }),
     });
-    const text = response.content.filter((b)=>b.type==="text").map((b:any)=>b.text).join("\n");
+    const data = await response.json();
+    if(!response.ok) throw new Error(data?.error?.message || "Gemini request failed.");
+    const text = data?.candidates?.[0]?.content?.parts?.map((part:{text?:string})=>part.text || "").join("\n").trim();
+    if(!text) throw new Error("Gemini returned an empty answer.");
     return NextResponse.json({answer:text});
   } catch (e:any) {
     return NextResponse.json({error:e?.message ?? "Generation failed."},{status:500});

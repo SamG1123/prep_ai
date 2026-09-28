@@ -9,15 +9,17 @@ A full-stack Next.js interview-preparation app built around the supplied company
 - AI answer studio with three styles: Interviewee, Normal, Specific format
 - Company-level printable PDF export
 - 7,475 deduplicated question records bundled as JSON
-- API route for server-side Anthropic calls, keeping the API key out of the browser
+- API route for server-side Google Gemini calls, keeping the API key out of the browser
 
 ## Run locally
 ```bash
 npm install
 cp .env.example .env.local
-# add ANTHROPIC_API_KEY
+# add GEMINI_API_KEY from https://aistudio.google.com/apikey
 npm run dev
 ```
+
+The app uses Google Gemini's free API tier by default (`gemini-2.5-flash`). Free-tier quotas and rate limits apply, especially when exporting a large company pack. Set `GEMINI_MODEL` in `.env.local` to use another model available to your API key.
 
 Open http://localhost:3000.
 
