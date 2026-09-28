@@ -39,6 +39,11 @@ type AnswerCache = Record<string, string>;
 
 const qs = questions as Q[];
 const ANSWER_CACHE_KEY = "prep-ai-answer-cache-v1";
+const PDF_REQUEST_LIMIT = 25;
+const PDF_REQUEST_WINDOW_MS = 60_000;
+const PDF_PRIMARY_MODEL = "openai/gpt-oss-120b";
+const PDF_SECONDARY_MODEL = "openai/gpt-oss-20b";
+const pdfRequestTimes = new Map<string, number[]>();
 const normalize = (value: string) => value.trim().toLowerCase();
 const unique = (values: string[]) =>
   Array.from(new Set(values.filter(Boolean))).sort((a, b) =>
@@ -64,6 +69,48 @@ function readAnswerCache(): AnswerCache {
     return parsed && typeof parsed === "object" ? parsed : {};
   } catch {
     return {};
+  }
+}
+
+function hasPdfRequestSlot(model: string) {
+  const requestTimes = pdfRequestTimes.get(model) || [];
+  const now = Date.now();
+  while (
+    requestTimes.length > 0 &&
+    now - requestTimes[0] >= PDF_REQUEST_WINDOW_MS
+  ) {
+    requestTimes.shift();
+  }
+  pdfRequestTimes.set(model, requestTimes);
+  return requestTimes.length < PDF_REQUEST_LIMIT;
+}
+
+function choosePdfModel(activeModel: string) {
+  if (activeModel === PDF_PRIMARY_MODEL && hasPdfRequestSlot(PDF_PRIMARY_MODEL)) {
+    return PDF_PRIMARY_MODEL;
+  }
+  return PDF_SECONDARY_MODEL;
+}
+
+async function waitForPdfRequestSlot(model: string) {
+  while (true) {
+    const requestTimes = pdfRequestTimes.get(model) || [];
+    const now = Date.now();
+    while (
+      requestTimes.length > 0 &&
+      now - requestTimes[0] >= PDF_REQUEST_WINDOW_MS
+    ) {
+      requestTimes.shift();
+    }
+
+    if (requestTimes.length < PDF_REQUEST_LIMIT) {
+      requestTimes.push(now);
+      pdfRequestTimes.set(model, requestTimes);
+      return;
+    }
+
+    const waitTime = PDF_REQUEST_WINDOW_MS - (now - requestTimes[0]) + 50;
+    await new Promise((resolve) => setTimeout(resolve, waitTime));
   }
 }
 
@@ -239,6 +286,7 @@ export default function InterviewStudio() {
     );
     setExporting(true);
     try {
+      let activePdfModel = PDF_PRIMARY_MODEL;
       const newAnswers: Record<string, string> = {};
       for (const question of companyQuestions) {
         const cacheKey = getAnswerCacheKey(question, style);
@@ -247,7 +295,9 @@ export default function InterviewStudio() {
           newAnswers[String(question.sl_no)] = cachedAnswer;
           continue;
         }
-        const response = await fetch("/api/answer", {
+        activePdfModel = choosePdfModel(activePdfModel);
+        await waitForPdfRequestSlot(activePdfModel);
+        let response = await fetch("/api/answer", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -256,9 +306,29 @@ export default function InterviewStudio() {
             role: question.role,
             domain: question.domain,
             style,
+            pdf: true,
+            pdfModel: activePdfModel,
           }),
         });
-        const data = await response.json();
+        let data = await response.json();
+        if (!response.ok && activePdfModel === PDF_PRIMARY_MODEL) {
+          activePdfModel = PDF_SECONDARY_MODEL;
+          await waitForPdfRequestSlot(activePdfModel);
+          response = await fetch("/api/answer", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              question: question.question,
+              company: question.company,
+              role: question.role,
+              domain: question.domain,
+              style,
+              pdf: true,
+              pdfModel: activePdfModel,
+            }),
+          });
+          data = await response.json();
+        }
         if (!response.ok)
           throw new Error(data.error || "Failed to generate an answer.");
         newAnswers[String(question.sl_no)] = data.answer;
