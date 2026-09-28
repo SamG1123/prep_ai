@@ -40,6 +40,7 @@ async function redisCommand(command: string[]) {
   });
   if(!response.ok) throw new Error(`Redis request failed (${response.status}).`);
   const data = await response.json();
+  if(data?.error) throw new Error(`Redis command failed: ${data.error}`);
   return data.result ?? null;
 }
 
@@ -62,14 +63,16 @@ export async function POST(req:NextRequest){
     if(!question) return NextResponse.json({error:"Question is required."},{status:400});
     const cacheKey = getAnswerCacheKey({ question, company, role, domain, style });
     let redisEnabled = Boolean(getRedisConfig());
+    let redisStatus: "disabled" | "miss" | "hit" | "stored" | "unavailable" = redisEnabled ? "miss" : "disabled";
     if(redisEnabled){
       try {
         const cachedAnswer = await redisCommand(["GET", cacheKey]);
         if(typeof cachedAnswer === "string" && cachedAnswer.trim()){
-          return NextResponse.json({answer:cachedAnswer, provider:"Redis", cached:true});
+          return NextResponse.json({answer:cachedAnswer, provider:"Redis", cached:true, redis:"hit"});
         }
       } catch {
         redisEnabled = false;
+        redisStatus = "unavailable";
       }
     }
     const system = `You are an interview preparation assistant. Company: ${company}. Role: ${role}. Domain: ${domain}. ${prompts[style] || prompts.interviewee}
@@ -126,11 +129,12 @@ Do not invent personal experience for the candidate. For behavioral questions, p
           if(redisEnabled){
             try {
               await redisCommand(["SET", cacheKey, text, "EX", String(CACHE_TTL_SECONDS)]);
+              redisStatus = "stored";
             } catch {
-              // Redis is an optimization; provider responses must still succeed if it is unavailable.
+              redisStatus = "unavailable";
             }
           }
-          return NextResponse.json({answer:text, provider:provider.name, cached:false});
+          return NextResponse.json({answer:text, provider:provider.name, cached:false, redis:redisStatus});
         }
         failures.push(`${provider.name} returned an empty answer`);
       } catch(error: any) {

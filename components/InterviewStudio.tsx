@@ -194,7 +194,7 @@ export default function InterviewStudio() {
   const [selected, setSelected] = useState<Q | null>(null);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [answerCache, setAnswerCache] = useState<AnswerCache>(readAnswerCache);
-  const [answerSource, setAnswerSource] = useState<"cache" | "generated" | null>(null);
+  const [answerSource, setAnswerSource] = useState<"cache" | "redis" | "generated" | null>(null);
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -261,7 +261,7 @@ export default function InterviewStudio() {
         }
         return next;
       });
-      setAnswerSource("generated");
+      setAnswerSource(data.cached && data.provider === "Redis" ? "redis" : "generated");
     } catch (error: any) {
       alert(error.message);
     } finally {
@@ -556,6 +556,8 @@ export default function InterviewStudio() {
                       <span>
                         {answerSource === "cache"
                           ? "Retrieved from this browser's cache"
+                          : answerSource === "redis"
+                            ? "Retrieved from shared Redis cache"
                           : answerSource === "generated"
                             ? `Generated for ${style} delivery`
                             : `Ready for ${style} delivery`}
