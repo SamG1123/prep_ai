@@ -10,10 +10,15 @@
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.3.0",
+    "katex": "^0.18.9",
+    "lucide-react": "^0.468.0",
     "next": "^15.5.4",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
-    "lucide-react": "^0.468.0"
+    "react-markdown": "^10.1.0",
+    "rehype-katex": "^7.0.1",
+    "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

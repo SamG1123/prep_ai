@@ -1,2 +1,5 @@
-import InterviewApp from "../components/InterviewApp";
-export default function Page(){ return <InterviewApp/>; }
+import InterviewStudio from "../components/InterviewStudio";
+
+export default function Page() {
+	return <InterviewStudio />;
+}
