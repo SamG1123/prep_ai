@@ -22,7 +22,6 @@ import {
   MessageSquare,
   Network,
   Search,
-  Send,
   Sparkles,
   Volume2,
 } from "lucide-react";
@@ -39,7 +38,7 @@ type AnswerCache = Record<string, string>;
 
 const qs = questions as Q[];
 const ANSWER_CACHE_KEY = "prep-ai-answer-cache-v1";
-const PDF_REQUEST_LIMIT = 25;
+const PDF_REQUEST_LIMIT = 20;
 const PDF_REQUEST_WINDOW_MS = 60_000;
 const PDF_PRIMARY_MODEL = "openai/gpt-oss-120b";
 const PDF_SECONDARY_MODEL = "openai/gpt-oss-20b";
@@ -219,9 +218,9 @@ export default function InterviewStudio() {
     );
   }, [company, domain, search]);
 
-  async function generate(question: Q) {
+  async function generate(question: Q, responseStyle: Style = style) {
     setSelected(question);
-    const cacheKey = getAnswerCacheKey(question, style);
+    const cacheKey = getAnswerCacheKey(question, responseStyle);
     const cachedAnswer = answerCache[cacheKey];
     if (cachedAnswer) {
       setAnswers((current) => ({
@@ -242,7 +241,7 @@ export default function InterviewStudio() {
           company: question.company,
           role: question.role,
           domain: question.domain,
-          style,
+          style: responseStyle,
         }),
       });
       const data = await response.json();
@@ -274,6 +273,14 @@ export default function InterviewStudio() {
     await navigator.clipboard.writeText(answers[String(selected.sl_no)]);
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1600);
+  }
+
+  function readAnswerAloud() {
+    if (!selected || !answers[String(selected.sl_no)] || !("speechSynthesis" in window)) return;
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(
+      new SpeechSynthesisUtterance(answers[String(selected.sl_no)]),
+    );
   }
 
   async function exportPDF() {
@@ -528,7 +535,10 @@ export default function InterviewStudio() {
                       (option) => (
                         <button
                           className={style === option ? "selected" : ""}
-                          onClick={() => setStyle(option)}
+                          onClick={() => {
+                            setStyle(option);
+                            if (selected) void generate(selected, option);
+                          }}
                           key={option}
                         >
                           {option === "interviewee"
@@ -565,11 +575,13 @@ export default function InterviewStudio() {
                     </div>
                   </div>
                   <div className="answer-actions">
-                    <button title="Copy answer" onClick={copyAnswer}>
+                    <button className="copy-button" onClick={copyAnswer}>
                       {copied ? <Check size={16} /> : <Clipboard size={16} />}
+                      {copied ? "Copied" : "Copy answer"}
                     </button>
-                    <button title="Read answer aloud">
+                    <button className="read-button" onClick={readAnswerAloud}>
                       <Volume2 size={16} />
+                      Read aloud
                     </button>
                   </div>
                 </div>
@@ -626,19 +638,6 @@ export default function InterviewStudio() {
                       </div>
                     </>
                   )}
-                </div>
-                <div className="answer-footer">
-                  <button className="copy-button" onClick={copyAnswer}>
-                    {copied ? <Check size={16} /> : <Clipboard size={16} />}
-                    {copied ? "Copied" : "Copy full script"}
-                  </button>
-                  <button
-                    className="regen-button"
-                    onClick={() => generate(selected)}
-                    disabled={loading}
-                  >
-                    <Send size={15} /> Regenerate response
-                  </button>
                 </div>
               </article>
             </>
