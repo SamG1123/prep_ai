@@ -1,14 +1,9 @@
 import type { NextAuthOptions } from "next-auth";
-import { MongoDBAdapter } from "@auth/mongodb-adapter";
 import CredentialsProvider from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
-import { getMongoClientPromise } from "./lib/mongodb";
 import { getUsers } from "./lib/mongodb";
 
 export const authOptions: NextAuthOptions = {
-  adapter: process.env.MONGODB_URI
-    ? MongoDBAdapter(getMongoClientPromise())
-    : undefined,
   providers: [
     CredentialsProvider({
       name: "Email and password",

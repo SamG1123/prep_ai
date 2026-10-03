@@ -33,6 +33,13 @@ export async function POST(req: NextRequest) {
     if (error?.code === 11000) {
       return NextResponse.json({ error: "An account with this email already exists." }, { status: 409 });
     }
+    const message = String(error?.message || "");
+    if (/querySrv|ECONNREFUSED|ENOTFOUND|MongoServerSelectionError|MongoNetworkError/i.test(message)) {
+      return NextResponse.json(
+        { error: "MongoDB is unreachable. Check MONGODB_URI, Atlas Network Access, and your DNS/VPN connection." },
+        { status: 503 },
+      );
+    }
     return NextResponse.json({ error: "Unable to create the account." }, { status: 500 });
   }
 }
