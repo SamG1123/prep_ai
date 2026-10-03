@@ -19,12 +19,15 @@ import {
   Check,
   Clipboard,
   Download,
+  LockKeyhole,
   Loader2,
+  Mail,
   MessageCircle,
   MessageSquare,
   Network,
   Search,
   Sparkles,
+  UserRound,
   Volume2,
 } from "lucide-react";
 
@@ -494,27 +497,32 @@ export default function InterviewStudio() {
           <span>/</span>
           <strong>Track {selected ? `#${selected.sl_no}` : "ready"}</strong>
         </div>
-        <button
-          className="export-button"
-          onClick={exportPDF}
-          disabled={exporting || !company}
-        >
-          {exporting ? (
-            <Loader2 className="spin" size={16} />
+        <div className="header-actions">
+          <button
+            className="export-button"
+            onClick={exportPDF}
+            disabled={exporting || !company}
+          >
+            {exporting ? (
+              <Loader2 className="spin" size={16} />
+            ) : (
+              <Download size={16} />
+            )}{" "}
+            Export pack
+          </button>
+          {authStatus === "authenticated" ? (
+            <button className="auth-button" onClick={() => void signOut()}>
+              <UserRound size={15} />
+              <span>{session.user?.name || session.user?.email || "Account"}</span>
+              <span className="auth-action-label">Sign out</span>
+            </button>
           ) : (
-            <Download size={16} />
-          )}{" "}
-          Export pack
-        </button>
-        {authStatus === "authenticated" ? (
-          <button className="auth-button" onClick={() => void signOut()}>
-            {session.user?.name || session.user?.email || "Account"} · Sign out
-          </button>
-        ) : (
-          <button className="auth-button" onClick={() => setAuthOpen(true)}>
-            Sign in
-          </button>
-        )}
+            <button className="auth-button" onClick={() => setAuthOpen(true)}>
+              <UserRound size={15} />
+              Sign in
+            </button>
+          )}
+        </div>
       </header>
 
       <div className="studio-layout">
@@ -840,10 +848,28 @@ export default function InterviewStudio() {
             <p>{authView === "signin" ? "Sign in to save and continue your question chats." : "Create an account to keep your chat sessions private."}</p>
             <form className="auth-form" onSubmit={submitAuth}>
               {authView === "signup" && (
-                <input value={authName} onChange={(event) => setAuthName(event.target.value)} placeholder="Name" autoComplete="name" required />
+                <label className="auth-field">
+                  <span>Name</span>
+                  <div className="auth-input-wrap">
+                    <UserRound size={16} />
+                    <input value={authName} onChange={(event) => setAuthName(event.target.value)} placeholder="Your name" autoComplete="name" required />
+                  </div>
+                </label>
               )}
-              <input value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} type="email" placeholder="Email" autoComplete="email" required />
-              <input value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} type="password" placeholder="Password (8+ characters)" autoComplete={authView === "signin" ? "current-password" : "new-password"} minLength={8} required />
+              <label className="auth-field">
+                <span>Email</span>
+                <div className="auth-input-wrap">
+                  <Mail size={16} />
+                  <input value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} type="email" placeholder="you@example.com" autoComplete="email" required />
+                </div>
+              </label>
+              <label className="auth-field">
+                <span>Password</span>
+                <div className="auth-input-wrap">
+                  <LockKeyhole size={16} />
+                  <input value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} type="password" placeholder={authView === "signin" ? "Your password" : "At least 8 characters"} autoComplete={authView === "signin" ? "current-password" : "new-password"} minLength={8} required />
+                </div>
+              </label>
               {authError && <span className="auth-error">{authError}</span>}
               <button type="submit" disabled={authLoading}>{authLoading ? "Working..." : authView === "signin" ? "Sign in" : "Create account"}</button>
             </form>
