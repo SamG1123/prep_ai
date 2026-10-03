@@ -23,6 +23,10 @@ The app tries Groq first (`llama-3.3-70b-versatile`) and automatically falls bac
 
 For a shared deployment cache, create an Upstash Redis database and add `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` to the deployment environment. The API caches answers by question, company, role, domain, and style for 30 days. Redis is optional and failures fall back to normal provider generation.
 
+Question chat sessions are stored in MongoDB Atlas. Add `MONGODB_URI`, `MONGODB_DB_NAME`, and a private `CHAT_RATE_LIMIT_SALT` to the server environment. Sessions expire after 30 days. Chat is limited to 30 user messages per session, 25 requests per client per ten-minute window, and interview-related messages only. Set `GROQ_CHAT_MODEL` or `GEMINI_CHAT_MODEL` to override the chat model independently from answer generation.
+
+Chat uses email/password accounts stored in MongoDB Atlas with bcrypt password hashes. Add `MONGODB_URI`, `MONGODB_DB_NAME`, `NEXTAUTH_SECRET`, and `NEXTAUTH_URL` to the server environment. Auth.js users and sessions are stored in MongoDB Atlas.
+
 PDF exports use Groq's `openai/gpt-oss-120b` model first and then switch permanently to `openai/gpt-oss-20b` when the 120B model reaches its quota or rate limit. Each PDF model is limited to 25 requests per rolling minute. Override them with `GROQ_PDF_MODEL_PRIMARY` and `GROQ_PDF_MODEL_SECONDARY` if needed.
 
 Open http://localhost:3000.

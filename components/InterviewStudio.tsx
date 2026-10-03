@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { signIn, signOut, useSession } from "next-auth/react";
 import questions from "../public/questions.json";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -19,6 +20,7 @@ import {
   Clipboard,
   Download,
   Loader2,
+  MessageCircle,
   MessageSquare,
   Network,
   Search,
@@ -35,6 +37,7 @@ type Q = {
 };
 type Style = "interviewee" | "normal" | "structured";
 type AnswerCache = Record<string, string>;
+type ChatMessage = { role: "user" | "assistant"; content: string };
 
 const qs = questions as Q[];
 const ANSWER_CACHE_KEY = "prep-ai-answer-cache-v1";
@@ -182,6 +185,7 @@ function AnswerPackDocument({
 }
 
 export default function InterviewStudio() {
+  const { data: session, status: authStatus } = useSession();
   const companies = useMemo(
     () => unique(qs.map((question) => question.company)),
     [],
@@ -197,6 +201,18 @@ export default function InterviewStudio() {
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatInput, setChatInput] = useState("");
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatConversationId, setChatConversationId] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+  const [authOpen, setAuthOpen] = useState(false);
+  const [authView, setAuthView] = useState<"signin" | "signup">("signin");
+  const [authName, setAuthName] = useState("");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
   const domains = useMemo(
     () =>
       unique(
@@ -219,6 +235,11 @@ export default function InterviewStudio() {
   }, [company, domain, search]);
 
   async function generate(question: Q, responseStyle: Style = style) {
+    if (!selected || String(selected.sl_no) !== String(question.sl_no)) {
+      setChatMessages([]);
+      setChatConversationId("");
+      setChatOpen(false);
+    }
     setSelected(question);
     const cacheKey = getAnswerCacheKey(question, responseStyle);
     const cachedAnswer = answerCache[cacheKey];
@@ -281,6 +302,85 @@ export default function InterviewStudio() {
     window.speechSynthesis.speak(
       new SpeechSynthesisUtterance(answers[String(selected.sl_no)]),
     );
+  }
+
+  function openChat() {
+    if (!selected) return;
+    if (authStatus !== "authenticated") {
+      setAuthView("signin");
+      setAuthError("");
+      setAuthOpen(true);
+      return;
+    }
+    setChatConversationId((current) => current || window.crypto.randomUUID());
+    setChatOpen(true);
+  }
+
+  async function submitAuth(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setAuthError("");
+    setAuthLoading(true);
+    try {
+      if (authView === "signup") {
+        const response = await fetch("/api/auth/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: authName, email: authEmail, password: authPassword }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Unable to create account.");
+      }
+      const result = await signIn("credentials", {
+        email: authEmail,
+        password: authPassword,
+        redirect: false,
+      });
+      if (result?.error) throw new Error("Email or password is incorrect.");
+      setAuthOpen(false);
+      setAuthPassword("");
+      window.location.reload();
+    } catch (error: any) {
+      setAuthError(error.message);
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  async function sendChat(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selected || !chatInput.trim() || chatLoading) return;
+    const message = chatInput.trim();
+    const conversationId = chatConversationId || window.crypto.randomUUID();
+    setChatConversationId(conversationId);
+    setChatInput("");
+    setChatMessages((current) => [...current, { role: "user", content: message }]);
+    setChatLoading(true);
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          conversationId,
+          message,
+          question: selected.question,
+          company: selected.company,
+          role: selected.role,
+          domain: selected.domain,
+          generatedAnswer: answers[String(selected.sl_no)] || "",
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Chat request failed.");
+      setChatMessages((current) => [
+        ...current,
+        { role: "assistant", content: data.message },
+      ]);
+    } catch (error: any) {
+      setChatMessages((current) => current.slice(0, -1));
+      alert(error.message);
+    } finally {
+      setChatLoading(false);
+    }
   }
 
   async function exportPDF() {
@@ -406,6 +506,15 @@ export default function InterviewStudio() {
           )}{" "}
           Export pack
         </button>
+        {authStatus === "authenticated" ? (
+          <button className="auth-button" onClick={() => void signOut()}>
+            {session.user?.name || session.user?.email || "Account"} · Sign out
+          </button>
+        ) : (
+          <button className="auth-button" onClick={() => setAuthOpen(true)}>
+            Sign in
+          </button>
+        )}
       </header>
 
       <div className="studio-layout">
@@ -583,6 +692,10 @@ export default function InterviewStudio() {
                       <Volume2 size={16} />
                       Read aloud
                     </button>
+                    <button className="chat-button" onClick={openChat}>
+                      <MessageCircle size={16} />
+                      Discuss question
+                    </button>
                   </div>
                 </div>
                 <div className="answer-body">
@@ -640,10 +753,106 @@ export default function InterviewStudio() {
                   )}
                 </div>
               </article>
+              {chatOpen && (
+                <section className="chat-screen" aria-label="Question chat">
+                  <nav className="chat-navbar">
+                    <div className="chat-brand">
+                      <div className="brand-mark">
+                        <Sparkles size={16} />
+                      </div>
+                      <strong>PREP AI</strong>
+                    </div>
+                    <div className="chat-nav-links">
+                      <button className="chat-nav-link" onClick={() => setChatOpen(false)}>
+                        Answer studio
+                      </button>
+                      <span className="chat-nav-link active">Question chat</span>
+                    </div>
+                    <button
+                      className="chat-close"
+                      onClick={() => setChatOpen(false)}
+                      aria-label="Close question chat"
+                    >
+                      ×
+                    </button>
+                  </nav>
+                  <div className="chat-screen-content">
+                    <div className="chat-header">
+                      <div>
+                        <strong>Question chat</strong>
+                        <span>Discuss this question with your AI coach</span>
+                      </div>
+                    </div>
+                  <div className="chat-context">
+                    <MessageCircle size={15} />
+                    <span>{selected.question}</span>
+                  </div>
+                  <div className="chat-messages" aria-live="polite">
+                    {chatMessages.length === 0 && (
+                      <div className="chat-empty">
+                        Ask for an explanation, a stronger example, or a more natural way to say the answer.
+                      </div>
+                    )}
+                    {chatMessages.map((message, index) => (
+                      <div className={`chat-message ${message.role}`} key={`${message.role}-${index}`}>
+                        <span>{message.role === "user" ? "You" : "Prep AI"}</span>
+                        <div className="chat-message-content">
+                          <ReactMarkdown
+                            remarkPlugins={[remarkGfm, remarkMath]}
+                            rehypePlugins={[rehypeKatex]}
+                          >
+                            {normalizeMathDelimiters(message.content)}
+                          </ReactMarkdown>
+                        </div>
+                      </div>
+                    ))}
+                    {chatLoading && (
+                      <div className="chat-loading">
+                        <Loader2 className="spin" size={16} /> Thinking...
+                      </div>
+                    )}
+                  </div>
+                  <form className="chat-form" onSubmit={sendChat}>
+                    <textarea
+                      value={chatInput}
+                      onChange={(event) => setChatInput(event.target.value)}
+                      placeholder="Ask about this question..."
+                      rows={2}
+                      disabled={chatLoading}
+                    />
+                    <button type="submit" disabled={chatLoading || !chatInput.trim()}>
+                      Send
+                    </button>
+                  </form>
+                  </div>
+                </section>
+              )}
             </>
           )}
         </section>
       </div>
+      {authOpen && (
+        <div className="auth-backdrop" role="dialog" aria-modal="true" aria-label="Account authentication">
+          <div className="auth-modal">
+            <button className="auth-modal-close" onClick={() => setAuthOpen(false)} aria-label="Close authentication">×</button>
+            <div className="section-kicker">PREP AI ACCOUNT</div>
+            <h2>{authView === "signin" ? "Welcome back" : "Create your account"}</h2>
+            <p>{authView === "signin" ? "Sign in to save and continue your question chats." : "Create an account to keep your chat sessions private."}</p>
+            <form className="auth-form" onSubmit={submitAuth}>
+              {authView === "signup" && (
+                <input value={authName} onChange={(event) => setAuthName(event.target.value)} placeholder="Name" autoComplete="name" required />
+              )}
+              <input value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} type="email" placeholder="Email" autoComplete="email" required />
+              <input value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} type="password" placeholder="Password (8+ characters)" autoComplete={authView === "signin" ? "current-password" : "new-password"} minLength={8} required />
+              {authError && <span className="auth-error">{authError}</span>}
+              <button type="submit" disabled={authLoading}>{authLoading ? "Working..." : authView === "signin" ? "Sign in" : "Create account"}</button>
+            </form>
+            <button className="auth-switch" onClick={() => { setAuthView(authView === "signin" ? "signup" : "signin"); setAuthError(""); }}>
+              {authView === "signin" ? "Need an account? Create one" : "Already have an account? Sign in"}
+            </button>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
