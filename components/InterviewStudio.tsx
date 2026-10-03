@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { signIn, signOut, useSession } from "next-auth/react";
+import { AnimatePresence, motion } from "framer-motion";
 import questions from "../public/questions.json";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -54,6 +55,77 @@ const unique = (values: string[]) =>
   Array.from(new Set(values.filter(Boolean))).sort((a, b) =>
     a.localeCompare(b),
   );
+
+function SearchableFilter({
+  value,
+  options,
+  allLabel,
+  placeholder,
+  onChange,
+}: {
+  value: string;
+  options: string[];
+  allLabel: string;
+  placeholder: string;
+  onChange: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const selectedLabel = value || allLabel;
+  const visibleOptions = useMemo(() => {
+    const term = normalize(query);
+    return [allLabel, ...options].filter(
+      (option) => !term || normalize(option).includes(term),
+    );
+  }, [allLabel, options, query]);
+
+  useEffect(() => {
+    if (!open) setQuery("");
+  }, [open]);
+
+  return (
+    <div className="searchable-filter">
+      <Search size={13} />
+      <input
+        value={open ? query : selectedLabel}
+        onFocus={() => {
+          setQuery(value);
+          setOpen(true);
+        }}
+        onChange={(event) => {
+          setQuery(event.target.value);
+          setOpen(true);
+        }}
+        onBlur={() => window.setTimeout(() => setOpen(false), 140)}
+        placeholder={placeholder}
+        aria-label={placeholder}
+      />
+      {open && (
+        <div className="searchable-options">
+          {visibleOptions.length > 0 ? (
+            visibleOptions.map((option) => (
+              <button
+                type="button"
+                key={option}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  onChange(option === allLabel ? "" : option);
+                  setQuery("");
+                  setOpen(false);
+                }}
+                className={option === selectedLabel ? "selected" : ""}
+              >
+                {option}
+              </button>
+            ))
+          ) : (
+            <span className="searchable-empty">No matches found</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function getAnswerCacheKey(question: Q, style: Style) {
   return JSON.stringify([
@@ -527,6 +599,23 @@ export default function InterviewStudio() {
 
       <div className="studio-layout">
         <aside className="navigator-rail">
+          <div className="sidebar-nav" aria-label="Primary navigation">
+            <span className="sidebar-nav-label">WORKSPACE</span>
+            <button className="sidebar-nav-item active" onClick={() => setChatOpen(false)}>
+              <Network size={15} />
+              <span>Question bank</span>
+            </button>
+            <button
+              className="sidebar-nav-item"
+              onClick={openChat}
+              disabled={!selected}
+              title={!selected ? "Select a question first" : "Open AI chat"}
+            >
+              <MessageCircle size={15} />
+              <span>AI chat</span>
+              {chatOpen && <span className="sidebar-nav-status" />}
+            </button>
+          </div>
           <div className="rail-heading">
             <div className="rail-title">
               <Network size={18} />
@@ -543,28 +632,24 @@ export default function InterviewStudio() {
             />
           </div>
           <div className="rail-filters">
-            <select
+            <SearchableFilter
               value={company}
-              onChange={(event) => {
-                setCompany(event.target.value);
+              options={companies}
+              allLabel="All companies"
+              placeholder="Search companies..."
+              onChange={(nextCompany) => {
+                setCompany(nextCompany);
                 setDomain("All domains");
                 setSelected(null);
               }}
-            >
-              <option value="">All companies</option>
-              {companies.map((item) => (
-                <option key={item}>{item}</option>
-              ))}
-            </select>
-            <select
-              value={domain}
-              onChange={(event) => setDomain(event.target.value)}
-            >
-              <option>All domains</option>
-              {domains.map((item) => (
-                <option key={item}>{item}</option>
-              ))}
-            </select>
+            />
+            <SearchableFilter
+              value={domain === "All domains" ? "" : domain}
+              options={domains}
+              allLabel="All domains"
+              placeholder="Search domains..."
+              onChange={(nextDomain) => setDomain(nextDomain || "All domains")}
+            />
           </div>
           <div className="question-list">
             {filtered.slice(0, 250).map((question) => {
@@ -761,8 +846,16 @@ export default function InterviewStudio() {
                   )}
                 </div>
               </article>
+              <AnimatePresence>
               {chatOpen && (
-                <section className="chat-screen" aria-label="Question chat">
+                <motion.section
+                  className="chat-screen"
+                  aria-label="Question chat"
+                  initial={{ opacity: 0, x: 28 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 28 }}
+                  transition={{ duration: 0.24, ease: "easeOut" }}
+                >
                   <nav className="chat-navbar">
                     <div className="chat-brand">
                       <div className="brand-mark">
@@ -795,6 +888,13 @@ export default function InterviewStudio() {
                     <MessageCircle size={15} />
                     <span>{selected.question}</span>
                   </div>
+                  <div className="chat-quick-actions">
+                    {["Explain this simply", "Give me an example", "Quiz me on this"].map((prompt) => (
+                      <button key={prompt} onClick={() => setChatInput(prompt)} disabled={chatLoading}>
+                        {prompt}
+                      </button>
+                    ))}
+                  </div>
                   <div className="chat-messages" aria-live="polite">
                     {chatMessages.length === 0 && (
                       <div className="chat-empty">
@@ -802,7 +902,13 @@ export default function InterviewStudio() {
                       </div>
                     )}
                     {chatMessages.map((message, index) => (
-                      <div className={`chat-message ${message.role}`} key={`${message.role}-${index}`}>
+                      <motion.div
+                        className={`chat-message ${message.role}`}
+                        key={`${message.role}-${index}`}
+                        initial={{ opacity: 0, y: 10, scale: 0.98 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        transition={{ duration: 0.22, delay: Math.min(index * 0.025, 0.2) }}
+                      >
                         <span>{message.role === "user" ? "You" : "Prep AI"}</span>
                         <div className="chat-message-content">
                           <ReactMarkdown
@@ -812,7 +918,7 @@ export default function InterviewStudio() {
                             {normalizeMathDelimiters(message.content)}
                           </ReactMarkdown>
                         </div>
-                      </div>
+                      </motion.div>
                     ))}
                     {chatLoading && (
                       <div className="chat-loading">
@@ -833,8 +939,9 @@ export default function InterviewStudio() {
                     </button>
                   </form>
                   </div>
-                </section>
+                </motion.section>
               )}
+              </AnimatePresence>
             </>
           )}
         </section>
