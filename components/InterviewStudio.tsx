@@ -380,13 +380,6 @@ export default function InterviewStudio() {
   }
 
   function openChat() {
-    if (!selected) return;
-    if (authStatus !== "authenticated") {
-      setAuthView("signin");
-      setAuthError("");
-      setAuthOpen(true);
-      return;
-    }
     setChatConversationId((current) => current || window.crypto.randomUUID());
     setChatOpen(true);
   }
@@ -423,7 +416,7 @@ export default function InterviewStudio() {
 
   async function sendChat(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selected || !chatInput.trim() || chatLoading) return;
+    if (!chatInput.trim() || chatLoading) return;
     const message = chatInput.trim();
     const conversationId = chatConversationId || window.crypto.randomUUID();
     setChatConversationId(conversationId);
@@ -437,11 +430,11 @@ export default function InterviewStudio() {
         body: JSON.stringify({
           conversationId,
           message,
-          question: selected.question,
-          company: selected.company,
-          role: selected.role,
-          domain: selected.domain,
-          generatedAnswer: answers[String(selected.sl_no)] || "",
+          question: selected?.question || "",
+          company: selected?.company || "",
+          role: selected?.role || "",
+          domain: selected?.domain || "",
+          generatedAnswer: selected ? answers[String(selected.sl_no)] || "" : "",
         }),
       });
       const data = await response.json();
@@ -605,12 +598,11 @@ export default function InterviewStudio() {
               <Network size={15} />
               <span>Question bank</span>
             </button>
-            <button
-              className="sidebar-nav-item"
-              onClick={openChat}
-              disabled={!selected}
-              title={!selected ? "Select a question first" : "Open AI chat"}
-            >
+              <button
+                className="sidebar-nav-item"
+                onClick={openChat}
+                title="Open AI chat"
+              >
               <MessageCircle size={15} />
               <span>AI chat</span>
               {chatOpen && <span className="sidebar-nav-status" />}
@@ -698,7 +690,7 @@ export default function InterviewStudio() {
         </aside>
 
         <section className="focus-stage">
-          {!selected ? (
+          {!selected && !chatOpen ? (
             <div className="empty-stage">
               <div className="empty-icon">
                 <MessageSquare size={28} />
@@ -712,6 +704,8 @@ export default function InterviewStudio() {
             </div>
           ) : (
             <>
+              {selected && (
+                <>
               <div className="question-header">
                 <div className="tag-row">
                   <span className="tag tag-accent">
@@ -846,6 +840,8 @@ export default function InterviewStudio() {
                   )}
                 </div>
               </article>
+                </>
+              )}
               <AnimatePresence>
               {chatOpen && (
                 <motion.section
@@ -886,7 +882,11 @@ export default function InterviewStudio() {
                     </div>
                   <div className="chat-context">
                     <MessageCircle size={15} />
-                    <span>{selected.question}</span>
+                    <span>
+                      {selected
+                        ? selected.question
+                        : "General Prep AI chat — ask about any question in the dataset."}
+                    </span>
                   </div>
                   <div className="chat-quick-actions">
                     {["Explain this simply", "Give me an example", "Quiz me on this"].map((prompt) => (
@@ -930,7 +930,7 @@ export default function InterviewStudio() {
                     <textarea
                       value={chatInput}
                       onChange={(event) => setChatInput(event.target.value)}
-                      placeholder="Ask about this question..."
+                      placeholder="Ask about any interview question..."
                       rows={2}
                       disabled={chatLoading}
                     />

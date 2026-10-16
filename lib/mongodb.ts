@@ -1,6 +1,6 @@
 import { MongoClient, type Collection } from "mongodb";
 
-type ChatSession = {
+export type ChatSession = {
   _id: string;
   userId: string;
   question: {
