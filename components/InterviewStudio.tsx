@@ -61,18 +61,68 @@ const unique = (values: string[]) =>
   Array.from(new Set(values.filter(Boolean))).sort((a, b) =>
     a.localeCompare(b),
   );
+const domainAliases: Record<string, string[]> = {
+  "Data Structures & Algorithms": ["coding", "programming", "algorithms", "dsa"],
+  "Object-Oriented Programming": [
+    "coding",
+    "programming",
+    "oop",
+    "object oriented",
+    "object-oriented",
+  ],
+  "Programming Languages": [
+    "coding",
+    "programming",
+    "language",
+    "languages",
+    "c",
+    "c++",
+    "c#",
+    "go",
+    "java",
+    "javascript",
+    "kotlin",
+    "php",
+    "python",
+    "ruby",
+    "rust",
+    "swift",
+    "typescript",
+  ],
+  "Software Development": ["coding", "programming", "software", "development"],
+  "Software Engineering": ["coding", "programming", "software", "engineering"],
+  "Web Development": [
+    "coding",
+    "programming",
+    "web",
+    "frontend",
+    "front-end",
+    "backend",
+    "back-end",
+    "html",
+    "css",
+    "javascript",
+    "typescript",
+  ],
+};
+
+function getDomainSearchText(domain: string) {
+  return [domain, ...(domainAliases[domain] || [])].map(normalize).join(" ");
+}
 
 function SearchableFilter({
   value,
   options,
   allLabel,
   placeholder,
+  searchText,
   onChange,
 }: {
   value: string;
   options: string[];
   allLabel: string;
   placeholder: string;
+  searchText?: (option: string) => string;
   onChange: (value: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -81,9 +131,10 @@ function SearchableFilter({
   const visibleOptions = useMemo(() => {
     const term = normalize(query);
     return [allLabel, ...options].filter(
-      (option) => !term || normalize(option).includes(term),
+      (option) =>
+        !term || (searchText ? searchText(option) : normalize(option)).includes(term),
     );
-  }, [allLabel, options, query]);
+  }, [allLabel, options, query, searchText]);
 
   useEffect(() => {
     if (!open) setQuery("");
@@ -308,7 +359,9 @@ export default function InterviewStudio() {
         (domain === "All domains" || (question.domains ?? []).includes(domain)) &&
         (!term ||
           normalize(question.question).includes(term) ||
-          (question.domains ?? []).some((item) => normalize(item).includes(term))),
+          (question.domains ?? []).some((item) =>
+            getDomainSearchText(item).includes(term),
+          )),
     );
   }, [company, domain, search]);
 
@@ -712,6 +765,7 @@ export default function InterviewStudio() {
               options={domains}
               allLabel="All domains"
               placeholder="Search domains..."
+              searchText={getDomainSearchText}
               onChange={(nextDomain) => setDomain(nextDomain || "All domains")}
             />
           </div>
