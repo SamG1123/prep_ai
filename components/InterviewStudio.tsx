@@ -37,7 +37,7 @@ type Q = {
   question: string;
   company: string;
   role: string;
-  domain: string;
+  domains: string[];
 };
 type Style = "interviewee" | "normal" | "structured";
 type AnswerCache = Record<string, string>;
@@ -139,7 +139,7 @@ function getAnswerCacheKey(question: Q, style: Style) {
     question.question,
     question.company,
     question.role,
-    question.domain,
+    question.domains.join(", "),
     style,
   ]);
 }
@@ -252,7 +252,7 @@ function AnswerPackDocument({
               Q{index + 1}. {question.question}
             </Text>
             <Text style={pdfStyles.meta}>
-              {question.domain}
+              {question.domains.join(", ")}
               {question.role ? ` · ${question.role}` : ""}
             </Text>
             <Text style={pdfStyles.answer}>
@@ -297,23 +297,18 @@ export default function InterviewStudio() {
   const [authError, setAuthError] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
   const domains = useMemo(
-    () =>
-      unique(
-        qs
-          .filter((question) => !company || question.company === company)
-          .map((question) => question.domain),
-      ),
-    [company],
+    () => unique(qs.flatMap((question) => question.domains ?? [])),
+    [],
   );
   const filtered = useMemo(() => {
     const term = normalize(search);
     return qs.filter(
       (question) =>
         (!company || question.company === company) &&
-        (domain === "All domains" || question.domain === domain) &&
+        (domain === "All domains" || (question.domains ?? []).includes(domain)) &&
         (!term ||
           normalize(question.question).includes(term) ||
-          normalize(question.domain).includes(term)),
+          (question.domains ?? []).some((item) => normalize(item).includes(term))),
     );
   }, [company, domain, search]);
 
@@ -365,7 +360,7 @@ export default function InterviewStudio() {
           question: question.question,
           company: question.company,
           role: question.role,
-          domain: question.domain,
+          domain: question.domains.join(", "),
           style: responseStyle,
         }),
       });
@@ -501,7 +496,7 @@ export default function InterviewStudio() {
           question: selected?.question || "",
           company: selected?.company || "",
           role: selected?.role || "",
-          domain: selected?.domain || "",
+          domain: selected?.domains?.join(", ") || "",
           generatedAnswer: selected ? answers[String(selected.sl_no)] || "" : "",
         }),
       });
@@ -556,7 +551,7 @@ export default function InterviewStudio() {
             question: question.question,
             company: question.company,
             role: question.role,
-            domain: question.domain,
+            domain: question.domains.join(", "),
             style,
             pdf: true,
             pdfModel: activePdfModel,
@@ -573,7 +568,7 @@ export default function InterviewStudio() {
               question: question.question,
               company: question.company,
               role: question.role,
-              domain: question.domain,
+              domain: question.domains.join(", "),
               style,
               pdf: true,
               pdfModel: activePdfModel,
@@ -736,7 +731,7 @@ export default function InterviewStudio() {
                       {isActive ? "Active" : answered ? "Solved" : "Queued"}
                     </span>
                     <span className="difficulty">
-                      {question.domain || "General"}
+                      {question.domains?.join(", ") || "General"}
                     </span>
                   </div>
                   <p>{question.question}</p>
@@ -786,7 +781,7 @@ export default function InterviewStudio() {
               <div className="question-header">
                 <div className="tag-row">
                   <span className="tag tag-accent">
-                    {selected.domain || "Interview"}
+                    {selected.domains?.join(", ") || "Interview"}
                   </span>
                   <span className="tag">{selected.company || "General"}</span>
                   {selected.role && (
@@ -901,7 +896,7 @@ export default function InterviewStudio() {
                         <div>
                           <span>Context</span>
                           <strong>
-                            {selected.domain || "General interview"}
+                            {selected.domains?.join(", ") || "General interview"}
                           </strong>
                         </div>
                         <div>
