@@ -1,8 +1,8 @@
 import { getServerSession } from "next-auth";
 import { authOptions } from "../auth";
 
-function configuredEmails(name: "ADMIN_EMAILS" | "REVIEWER_EMAILS") {
-  return (process.env[name] || "")
+function configuredReviewerEmails() {
+  return (process.env.REVIEWER_EMAILS || "")
     .split(",")
     .map((email) => email.trim().toLowerCase())
     .filter(Boolean);
@@ -14,11 +14,11 @@ export async function getAuthorizedEmail() {
 }
 
 export function isAdminEmail(email: string) {
-  return configuredEmails("ADMIN_EMAILS").includes(email);
+  return configuredReviewerEmails().includes(email);
 }
 
 export function isReviewerEmail(email: string) {
-  return isAdminEmail(email) || configuredEmails("REVIEWER_EMAILS").includes(email);
+  return configuredReviewerEmails().includes(email);
 }
 
 export async function requireAdmin() {
