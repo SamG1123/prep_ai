@@ -894,7 +894,7 @@ export default function InterviewStudio() {
   }
 
   return (
-    <main className="studio-shell">
+    <main className={`studio-shell ${reviewOpen ? "management-shell" : ""}`}>
       <header className="studio-header">
         <div className="brand-lockup">
           <div className="brand-mark">
