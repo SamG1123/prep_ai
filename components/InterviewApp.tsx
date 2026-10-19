@@ -1,15 +1,16 @@
 "use client";
-import { useMemo, useState } from "react";
-import questions from "../public/questions.json";
+import { useEffect, useMemo, useState } from "react";
 import { Download, Search, Sparkles, Loader2, MessageSquare } from "lucide-react";
 
 type Q = {sl_no:number|string;question:string;company:string;role:string;domains:string[]};
 type Style = "interviewee"|"normal"|"structured";
-const qs=questions as Q[];
 const normalize=(s:string)=>s.trim().toLowerCase();
 const unique=(xs:string[])=>Array.from(new Set(xs.filter(Boolean))).sort((a,b)=>a.localeCompare(b));
 
 export default function InterviewApp(){
+  const [qs,setQs]=useState<Q[]>([]);
+  const [loadError,setLoadError]=useState("");
+  useEffect(()=>{fetch("/api/questions").then(async r=>{const data=await r.json();if(!r.ok)throw new Error(data.error||"Unable to load questions.");setQs(data.questions||[])}).catch(e=>setLoadError(e instanceof Error?e.message:"Unable to load questions."));},[]);
   const companies=useMemo(()=>unique(qs.map(q=>q.company)),[]);
   const [company,setCompany]=useState("");
   const [domain,setDomain]=useState("All domains");

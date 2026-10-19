@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { signIn, signOut, useSession } from "next-auth/react";
 import { AnimatePresence, motion } from "framer-motion";
-import questions from "../public/questions.json";
+import * as XLSX from "xlsx";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -20,6 +20,7 @@ import {
   Check,
   Clipboard,
   Download,
+  FileUp,
   LockKeyhole,
   Loader2,
   Mail,
@@ -48,8 +49,19 @@ type ChatHistoryItem = {
   context: string;
   updatedAt: string;
 };
+type ReviewBatch = {
+  _id: string;
+  status: string;
+  company: string;
+  items: Array<{
+    question: string;
+    exactDuplicate: boolean;
+    similarityScore: number;
+    preprocessingStatus: string;
+    nearestMatch?: { question: string; company: string; score: number };
+  }>;
+};
 
-const qs = questions as Q[];
 const ANSWER_CACHE_KEY = "prep-ai-answer-cache-v1";
 const PDF_REQUEST_LIMIT = 20;
 const PDF_REQUEST_WINDOW_MS = 60_000;
@@ -318,9 +330,24 @@ function AnswerPackDocument({
 
 export default function InterviewStudio() {
   const { data: session, status: authStatus } = useSession();
+  const [qs, setQs] = useState<Q[]>([]);
+  const [questionBankError, setQuestionBankError] = useState("");
+  const [contributeOpen, setContributeOpen] = useState(false);
+  const [contributionCompany, setContributionCompany] = useState("");
+  const [contributionRole, setContributionRole] = useState("");
+  const [contributionDomain, setContributionDomain] = useState("");
+  const [contributionTags, setContributionTags] = useState("");
+  const [contributionText, setContributionText] = useState("");
+  const [contributionFile, setContributionFile] = useState("");
+  const [contributionFileType, setContributionFileType] = useState<"text" | "csv" | "xlsx" | "txt">("text");
+  const [contributionImportedItems, setContributionImportedItems] = useState<Array<{ text: string; domain: string; tags: string[] }>>([]);
+  const [contributionLoading, setContributionLoading] = useState(false);
+  const [contributionResult, setContributionResult] = useState<{ batchId: string; status: string; items: Array<{ question: string; similarityScore: number; exactDuplicate: boolean; nearestMatch?: { question: string; company: string; score: number } }> } | null>(null);
+  const [reviewBatches, setReviewBatches] = useState<ReviewBatch[]>([]);
+  const [reviewLoading, setReviewLoading] = useState(false);
   const companies = useMemo(
     () => unique(qs.map((question) => question.company)),
-    [],
+    [qs],
   );
   const [company, setCompany] = useState("");
   const [domain, setDomain] = useState("All domains");
@@ -347,9 +374,35 @@ export default function InterviewStudio() {
   const [authPassword, setAuthPassword] = useState("");
   const [authError, setAuthError] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/questions")
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Unable to load the question bank.");
+        if (!cancelled) setQs(data.questions || []);
+      })
+      .catch((error) => {
+        if (!cancelled) setQuestionBankError(error instanceof Error ? error.message : "Unable to load the question bank.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  useEffect(() => {
+    if (!contributeOpen || authStatus !== "authenticated") return;
+    setReviewLoading(true);
+    fetch("/api/contributions?status=awaiting_review")
+      .then(async (response) => {
+        const data = await response.json();
+        if (response.ok) setReviewBatches(data.batches || []);
+      })
+      .catch(() => undefined)
+      .finally(() => setReviewLoading(false));
+  }, [authStatus, contributeOpen]);
   const domains = useMemo(
     () => unique(qs.flatMap((question) => question.domains ?? [])),
-    [],
+    [qs],
   );
   const filtered = useMemo(() => {
     const term = normalize(search);
@@ -666,6 +719,93 @@ export default function InterviewStudio() {
     }
   }
 
+  async function readContributionFile(file: File) {
+    const lowerName = file.name.toLowerCase();
+    if (lowerName.endsWith(".txt")) {
+      setContributionFileType("txt");
+      setContributionImportedItems([]);
+      setContributionText(await file.text());
+      return;
+    }
+    const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
+    const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json<unknown[]>(firstSheet, { header: 1, defval: "" })
+      .filter((row): row is unknown[] => Array.isArray(row))
+      .map((row) => row.map((cell) => String(cell).trim()));
+    const header = rows[0]?.map((cell) => cell.toLowerCase()) || [];
+    const questionIndex = header.findIndex((cell) => /question|text|prompt/.test(cell));
+    const domainIndex = header.findIndex((cell) => cell === "domain" || cell === "category");
+    const tagsIndex = header.findIndex((cell) => /tags?|topics?/.test(cell));
+    const dataRows = questionIndex >= 0 ? rows.slice(1) : rows;
+    const importedItems = dataRows
+      .map((row) => ({
+        text: row[questionIndex >= 0 ? questionIndex : 0] || "",
+        domain: domainIndex >= 0 ? row[domainIndex] || "" : "",
+        tags: tagsIndex >= 0 ? (row[tagsIndex] || "").split(",").map((tag) => tag.trim()).filter(Boolean) : [],
+      }))
+      .filter((item) => item.text);
+    const lines = importedItems.map((item) => item.text);
+    setContributionImportedItems(importedItems);
+    setContributionFileType(lowerName.endsWith(".xlsx") ? "xlsx" : "csv");
+    setContributionText(lines.join("\n"));
+  }
+
+  async function submitContribution() {
+    if (!contributionCompany.trim() || !contributionText.trim()) {
+      alert("Add a company name and at least one question.");
+      return;
+    }
+
+    const questions = (contributionImportedItems.length ? contributionImportedItems : contributionText
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => ({
+        text: line,
+        domain: contributionDomain.trim(),
+        tags: contributionTags.split(",").map((tag) => tag.trim()).filter(Boolean),
+      })));
+    setContributionLoading(true);
+    setContributionResult(null);
+    try {
+      const response = await fetch("/api/contributions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          company: contributionCompany.trim(),
+          role: contributionRole.trim(),
+          questions,
+          sourceType: contributionFileType,
+          fileName: contributionFile,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Unable to submit contribution.");
+      setContributionResult(data);
+      setContributionText("");
+      setContributionFile("");
+      setContributionImportedItems([]);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "Unable to submit contribution.");
+    } finally {
+      setContributionLoading(false);
+    }
+  }
+
+  async function reviewBatch(batchId: string, action: "publish" | "reject", indexes?: number[]) {
+    const response = await fetch(`/api/contributions/${batchId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, indexes }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      alert(data.error || "Unable to update contribution.");
+      return;
+    }
+    setReviewBatches((current) => current.filter((batch) => batch._id !== batchId));
+  }
+
   return (
     <main className="studio-shell">
       <header className="studio-header">
@@ -719,9 +859,13 @@ export default function InterviewStudio() {
         <aside className="navigator-rail">
           <div className="sidebar-nav" aria-label="Primary navigation">
             <span className="sidebar-nav-label">WORKSPACE</span>
-            <button className="sidebar-nav-item active" onClick={() => setChatOpen(false)}>
+            <button className={`sidebar-nav-item ${!contributeOpen ? "active" : ""}`} onClick={() => { setChatOpen(false); setContributeOpen(false); }}>
               <Network size={15} />
               <span>Question bank</span>
+            </button>
+            <button className={`sidebar-nav-item ${contributeOpen ? "active" : ""}`} onClick={() => { setChatOpen(false); setContributeOpen(true); }}>
+              <FileUp size={15} />
+              <span>Contribute questions</span>
             </button>
               <button
                 className="sidebar-nav-item"
@@ -738,6 +882,7 @@ export default function InterviewStudio() {
               <Network size={18} />
               <span>Question stream</span>
             </div>
+            {questionBankError && <div className="rail-note">{questionBankError}</div>}
             <span className="count-badge">{filtered.length} Qs</span>
           </div>
           <div className="rail-search">
@@ -1106,6 +1251,91 @@ export default function InterviewStudio() {
           )}
         </section>
       </div>
+      {contributeOpen && (
+        <section className="contribution-panel" aria-label="Contribute questions">
+          <div className="contribution-heading">
+            <div>
+              <span className="section-kicker">CONTRIBUTION PIPELINE</span>
+              <h1>Contribute questions</h1>
+              <p>Paste one question per line or upload a CSV, XLSX, or TXT file. Prep AI will normalize questions, suggest metadata, and check duplicates before review.</p>
+            </div>
+            <button className="chat-close" onClick={() => setContributeOpen(false)} aria-label="Close contribution form">×</button>
+          </div>
+          <div className="contribution-form">
+            <label>Company name<input value={contributionCompany} onChange={(event) => setContributionCompany(event.target.value)} placeholder="e.g. Acme Corp" /></label>
+            <label>Job role (optional)<input value={contributionRole} onChange={(event) => setContributionRole(event.target.value)} placeholder="e.g. Software Engineer" /></label>
+            <label>Domain (optional)<input value={contributionDomain} onChange={(event) => setContributionDomain(event.target.value)} placeholder="AI will suggest one if blank" /></label>
+            <label>Tags (optional)<input value={contributionTags} onChange={(event) => setContributionTags(event.target.value)} placeholder="comma-separated, e.g. processes, threads" /></label>
+          </div>
+          <label className="contribution-upload">
+            <FileUp size={18} />
+            <span>{contributionFile || "Upload CSV, XLSX, or TXT"}</span>
+            <input
+              type="file"
+              accept=".csv,.xlsx,.txt,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              onChange={async (event) => {
+                const file = event.target.files?.[0];
+                if (!file) return;
+                setContributionFile(file.name);
+                try {
+                  await readContributionFile(file);
+                } catch (error) {
+                  alert(error instanceof Error ? error.message : "Unable to read this file.");
+                }
+              }}
+            />
+          </label>
+          <label>Questions<textarea value={contributionText} onChange={(event) => { setContributionFileType("text"); setContributionImportedItems([]); setContributionText(event.target.value); }} rows={9} placeholder={"Paste one question per line...\nWhat is the difference between a process and a thread?"} /></label>
+          <div className="contribution-actions">
+            <button className="export-button" onClick={() => void submitContribution()} disabled={contributionLoading}>
+              {contributionLoading ? <Loader2 className="spin" size={16} /> : <FileUp size={16} />} Submit for review
+            </button>
+            <span>Maximum 100 questions per batch</span>
+          </div>
+          {contributionResult && (
+            <div className="contribution-result">
+              <strong>Batch {contributionResult.status.replace("_", " ")}</strong>
+              <p>Each question has been normalized and checked against the live question bank. A reviewer must approve publishable questions.</p>
+              <div className="contribution-items">
+                {contributionResult.items.map((item, index) => (
+                  <div key={`${item.question}-${index}`}>
+                    <span>{item.exactDuplicate ? "Exact duplicate" : item.similarityScore > 0.9 ? "High similarity" : item.similarityScore >= 0.82 ? "Review" : "Ready for review"}</span>
+                    <p>{item.question}</p>
+                    {item.nearestMatch && <small>Closest match ({item.nearestMatch.company}): {item.nearestMatch.question} · {item.nearestMatch.score.toFixed(2)}</small>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {authStatus === "authenticated" && reviewBatches.length > 0 && (
+            <div className="contribution-result">
+              <strong>Reviewer queue</strong>
+              {reviewLoading ? <p>Loading review queue...</p> : reviewBatches.map((batch) => {
+                const publishable = batch.items
+                  .map((item, index) => ({ item, index }))
+                  .filter(({ item }) => item.preprocessingStatus !== "failed" && !item.exactDuplicate && item.similarityScore <= 0.9)
+                  .map(({ index }) => index);
+                return (
+                  <div className="contribution-items" key={batch._id}>
+                    <div>
+                      <span>{batch.company} · {batch.items.length} submissions</span>
+                      {batch.items.map((item, index) => (
+                        <p key={`${batch._id}-${index}`}>
+                          {index + 1}. {item.question} {item.exactDuplicate || item.similarityScore > 0.9 ? "(blocked duplicate)" : ""}
+                        </p>
+                      ))}
+                      <button className="export-button" onClick={() => void reviewBatch(batch._id, "publish", publishable)} disabled={!publishable.length}>
+                        Publish {publishable.length} safe item{publishable.length === 1 ? "" : "s"}
+                      </button>
+                      <button className="chat-close" onClick={() => void reviewBatch(batch._id, "reject")} aria-label="Reject contribution batch">Reject</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      )}
       {authOpen && (
         <div className="auth-backdrop" role="dialog" aria-modal="true" aria-label="Account authentication">
           <div className="auth-modal">
