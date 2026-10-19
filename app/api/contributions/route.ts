@@ -1,24 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { getContributionBatches, getQuestions, type ContributionItem } from "../../../lib/mongodb";
+import { getAdminSettings, getContributionBatches, getQuestions, type ContributionItem } from "../../../lib/mongodb";
 import { ensureSeedQuestions } from "../../../lib/question-store";
 import { hashQuestion, questionTokens, tokenSimilarity } from "../../../lib/question-utils";
 import { createEmbedding, preprocessQuestion } from "../../../lib/preprocessing";
 import { cosineSimilarity } from "../../../lib/question-utils";
-import { getServerSession } from "next-auth";
-import { authOptions } from "../../../auth";
+import { requireReviewerOrAdmin } from "../../../lib/admin";
 
 const MAX_ITEMS = 100;
 const statuses = ["uploaded", "preprocessing", "duplicate_checking", "awaiting_review", "published", "failed"] as const;
 
 function isStatus(value: unknown): value is (typeof statuses)[number] {
   return typeof value === "string" && statuses.includes(value as (typeof statuses)[number]);
-}
-
-async function isReviewer() {
-  const session = await getServerSession(authOptions);
-  const email = session?.user?.email?.trim().toLowerCase();
-  return Boolean(email && (process.env.REVIEWER_EMAILS || "").split(",").map((item) => item.trim().toLowerCase()).includes(email));
 }
 
 export async function POST(req: NextRequest) {
@@ -93,6 +86,9 @@ export async function POST(req: NextRequest) {
     }
     await batches.updateOne({ _id: batchId }, { $set: { status: "duplicate_checking", items: processed, updatedAt: new Date() } });
     await ensureSeedQuestions();
+    const configuredSettings = await (await getAdminSettings()).findOne({ _id: "global" });
+    const duplicateReviewThreshold = configuredSettings?.duplicateReviewThreshold ?? 0.82;
+    const duplicateBlockThreshold = configuredSettings?.duplicateBlockThreshold ?? 0.9;
     const questionCollection = await getQuestions();
     const questions = await questionCollection.find({}, { projection: { _id: 1, question: 1, questionHash: 1, searchTokens: 1, company: 1, embedding: 1 } }).toArray();
     for (const item of processed) {
@@ -126,9 +122,9 @@ export async function POST(req: NextRequest) {
       item.exactDuplicate = Boolean(exact);
       item.similarityScore = nearest?.score || 0;
       if (exact) item.reviewNote = "Exact normalized duplicate. It cannot be published as a new question.";
-      else if ((nearest?.score || 0) > 0.9) item.reviewNote = "High similarity match. Keep out of the canonical bank.";
-      else if ((nearest?.score || 0) >= 0.82) item.reviewNote = "Similarity is in the review range.";
-      if (nearest && nearest.score >= 0.82) {
+      else if ((nearest?.score || 0) > duplicateBlockThreshold) item.reviewNote = "High similarity match. Keep out of the canonical bank.";
+      else if ((nearest?.score || 0) >= duplicateReviewThreshold) item.reviewNote = "Similarity is in the review range.";
+      if (nearest && nearest.score >= duplicateReviewThreshold) {
         item.nearestMatch = {
           id: String(nearest.question._id),
           question: nearest.question.question,
@@ -146,7 +142,7 @@ export async function POST(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
-  if (!(await isReviewer())) return NextResponse.json({ error: "Reviewer access is required." }, { status: 403 });
+  if (!(await requireReviewerOrAdmin())) return NextResponse.json({ error: "Reviewer access is required." }, { status: 403 });
   const statusParam = new URL(req.url).searchParams.get("status");
   if (statusParam && !isStatus(statusParam)) return NextResponse.json({ error: "Invalid status." }, { status: 400 });
   const status = statusParam && isStatus(statusParam) ? statusParam : undefined;

@@ -28,6 +28,8 @@ import {
   MessageSquare,
   Network,
   Search,
+  Settings,
+  ShieldCheck,
   Sparkles,
   UserRound,
   Volume2,
@@ -342,6 +344,15 @@ export default function InterviewStudio() {
   const [questionBankError, setQuestionBankError] = useState("");
   const [contributeOpen, setContributeOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
+  const [adminOpen, setAdminOpen] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [adminData, setAdminData] = useState<{
+    settings: { duplicateReviewThreshold: number; duplicateBlockThreshold: number; autoPublishLowRisk: boolean };
+    stats: { pending: number; published: number; rejected: number; questionCount: number };
+    audit: Array<{ _id?: string; action: string; company: string; reviewerEmail: string; createdAt: string }>;
+  } | null>(null);
+  const [adminSettings, setAdminSettings] = useState({ duplicateReviewThreshold: 0.82, duplicateBlockThreshold: 0.9, autoPublishLowRisk: false });
+  const [adminSaving, setAdminSaving] = useState(false);
   const [contributionCompany, setContributionCompany] = useState("");
   const [contributionRole, setContributionRole] = useState("");
   const [contributionDomain, setContributionDomain] = useState("");
@@ -412,6 +423,22 @@ export default function InterviewStudio() {
       .catch(() => undefined)
       .finally(() => setReviewLoading(false));
   }, [authStatus, reviewOpen]);
+  useEffect(() => {
+    if (authStatus !== "authenticated") {
+      setIsAdmin(false);
+      return;
+    }
+    fetch("/api/admin")
+      .then(async (response) => {
+        if (response.status === 403) return;
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Unable to load admin panel.");
+        setIsAdmin(true);
+        setAdminData(data);
+        setAdminSettings(data.settings);
+      })
+      .catch(() => setIsAdmin(false));
+  }, [authStatus]);
   const domains = useMemo(
     () => unique(qs.flatMap((question) => question.domains ?? [])),
     [qs],
@@ -428,7 +455,7 @@ export default function InterviewStudio() {
             getDomainSearchText(item).includes(term),
           )),
     );
-  }, [company, domain, search]);
+  }, [company, domain, qs, search]);
 
   useEffect(() => {
     if (authStatus !== "authenticated" || !chatOpen) return;
@@ -831,6 +858,7 @@ export default function InterviewStudio() {
       setReviewSaving("");
       return;
     }
+
     if (action === "publish" || action === "reject") {
       setReviewBatches((current) => current.filter((batch) => batch._id !== batchId));
     } else {
@@ -845,6 +873,24 @@ export default function InterviewStudio() {
       }).filter((batch) => batch.items.length > 0));
     }
     setReviewSaving("");
+  }
+
+  async function saveAdminSettings() {
+    setAdminSaving(true);
+    try {
+      const response = await fetch("/api/admin", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(adminSettings),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Unable to save admin settings.");
+      setAdminData((current) => current ? { ...current, settings: data.settings } : current);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "Unable to save admin settings.");
+    } finally {
+      setAdminSaving(false);
+    }
   }
 
   return (
@@ -900,19 +946,25 @@ export default function InterviewStudio() {
         <aside className="navigator-rail">
           <div className="sidebar-nav" aria-label="Primary navigation">
             <span className="sidebar-nav-label">WORKSPACE</span>
-            <button className={`sidebar-nav-item ${!contributeOpen && !reviewOpen ? "active" : ""}`} onClick={() => { setChatOpen(false); setContributeOpen(false); setReviewOpen(false); }}>
+            <button className={`sidebar-nav-item ${!contributeOpen && !reviewOpen && !adminOpen ? "active" : ""}`} onClick={() => { setChatOpen(false); setContributeOpen(false); setReviewOpen(false); setAdminOpen(false); }}>
               <Network size={15} />
               <span>Question bank</span>
             </button>
-            <button className={`sidebar-nav-item ${contributeOpen ? "active" : ""}`} onClick={() => { setChatOpen(false); setContributeOpen(true); }}>
+            <button className={`sidebar-nav-item ${contributeOpen ? "active" : ""}`} onClick={() => { setChatOpen(false); setContributeOpen(true); setReviewOpen(false); setAdminOpen(false); }}>
               <FileUp size={15} />
               <span>Contribute questions</span>
             </button>
             {authStatus === "authenticated" && (
-              <button className={`sidebar-nav-item ${reviewOpen ? "active" : ""}`} onClick={() => { setChatOpen(false); setContributeOpen(false); setReviewOpen(true); }}>
+              <button className={`sidebar-nav-item ${reviewOpen ? "active" : ""}`} onClick={() => { setChatOpen(false); setContributeOpen(false); setReviewOpen(true); setAdminOpen(false); }}>
                 <Clipboard size={15} />
                 <span>Review queue</span>
                 {reviewBatches.length > 0 && <span className="sidebar-nav-status" />}
+              </button>
+            )}
+            {isAdmin && (
+              <button className={`sidebar-nav-item ${adminOpen ? "active" : ""}`} onClick={() => { setChatOpen(false); setContributeOpen(false); setReviewOpen(true); setAdminOpen(true); }}>
+                <ShieldCheck size={15} />
+                <span>Admin panel</span>
               </button>
             )}
               <button
@@ -1359,6 +1411,41 @@ export default function InterviewStudio() {
       )}
       {reviewOpen && authStatus === "authenticated" && (
         <section className="review-screen" aria-label="Contribution review queue">
+          {adminOpen && adminData && (
+            <section className="admin-panel" aria-label="Admin panel">
+              <div className="admin-header">
+                <div>
+                  <span className="section-kicker">SYSTEM ADMINISTRATION</span>
+                  <h1>Prep AI admin panel</h1>
+                  <p>Manage contribution policy, monitor the live bank, and moderate every submitted question.</p>
+                </div>
+                <Settings size={30} />
+              </div>
+              <div className="admin-metrics">
+                <div><strong>{adminData.stats.questionCount}</strong><span>Live questions</span></div>
+                <div><strong>{adminData.stats.pending}</strong><span>Pending batches</span></div>
+                <div><strong>{adminData.stats.published}</strong><span>Published logs</span></div>
+                <div><strong>{adminData.stats.rejected}</strong><span>Rejected logs</span></div>
+              </div>
+              <div className="admin-columns">
+                <div className="admin-settings-card">
+                  <span className="section-kicker">APPROVAL POLICY</span>
+                  <h2>Duplicate safeguards</h2>
+                  <label>Manual review threshold<input type="number" min="0" max="1" step="0.01" value={adminSettings.duplicateReviewThreshold} onChange={(event) => setAdminSettings((current) => ({ ...current, duplicateReviewThreshold: Number(event.target.value) }))} /></label>
+                  <label>Automatic block threshold<input type="number" min="0" max="1" step="0.01" value={adminSettings.duplicateBlockThreshold} onChange={(event) => setAdminSettings((current) => ({ ...current, duplicateBlockThreshold: Number(event.target.value) }))} /></label>
+                  <label className="admin-toggle"><input type="checkbox" checked={adminSettings.autoPublishLowRisk} onChange={(event) => setAdminSettings((current) => ({ ...current, autoPublishLowRisk: event.target.checked }))} /> Allow low-risk auto-publish</label>
+                  <button className="export-button" onClick={() => void saveAdminSettings()} disabled={adminSaving}>{adminSaving ? <Loader2 className="spin" size={15} /> : <Settings size={15} />} Save settings</button>
+                  <small>Thresholds are similarity scores from 0 to 1. Auto-publish remains disabled by default.</small>
+                </div>
+                <div className="admin-audit-card">
+                  <span className="section-kicker">RECENT ACTIVITY</span>
+                  <h2>Decision log</h2>
+                  {adminData.audit.length ? adminData.audit.map((entry) => <div className="admin-audit-row" key={String(entry._id)}><strong>{entry.action}</strong><span>{entry.company}</span><small>{entry.reviewerEmail} · {new Date(entry.createdAt).toLocaleString()}</small></div>) : <p>No decisions logged yet.</p>}
+                </div>
+              </div>
+              <div className="admin-review-callout"><div><strong>Moderation queue</strong><span>{adminData.stats.pending} batch{adminData.stats.pending === 1 ? "" : "es"} require review</span></div><button className="review-approve" onClick={() => setAdminOpen(false)}>Open approval queue below</button></div>
+            </section>
+          )}
           <div className="review-header">
             <div>
               <span className="section-kicker">MODERATION WORKSPACE</span>
@@ -1394,7 +1481,7 @@ export default function InterviewStudio() {
                   const batch = reviewBatches.find((item) => item._id === selectedReviewBatch) || reviewBatches[0];
                   const publishable = batch.items
                     .map((item, index) => ({ item, index }))
-                    .filter(({ item }) => item.reviewStatus === "approved" && item.preprocessingStatus !== "failed" && !item.exactDuplicate && item.similarityScore <= 0.9)
+                    .filter(({ item }) => item.reviewStatus === "approved" && item.preprocessingStatus !== "failed" && !item.exactDuplicate && item.similarityScore <= (adminData?.settings.duplicateBlockThreshold ?? 0.9))
                     .map(({ index }) => index);
                   return (
                     <>

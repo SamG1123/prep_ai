@@ -107,6 +107,15 @@ export type ContributionAudit = {
   createdAt: Date;
 };
 
+export type AdminSettings = {
+  _id: "global";
+  duplicateReviewThreshold: number;
+  duplicateBlockThreshold: number;
+  autoPublishLowRisk: boolean;
+  updatedAt: Date;
+  updatedBy: string;
+};
+
 type MongoState = {
   client: MongoClient;
   ready: Promise<MongoClient>;
@@ -190,4 +199,11 @@ export async function getContributionAudit(): Promise<Collection<ContributionAud
   await collection.createIndex({ batchId: 1, createdAt: -1 });
   await collection.createIndex({ createdAt: -1 });
   return collection;
+}
+
+export async function getAdminSettings(): Promise<Collection<AdminSettings>> {
+  const state = getMongoState();
+  const client = await state.ready;
+  const database = client.db(process.env.MONGODB_DB_NAME || "prep_ai");
+  return database.collection<AdminSettings>("admin_settings");
 }

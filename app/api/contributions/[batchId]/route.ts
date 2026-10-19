@@ -1,28 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "../../../../auth";
-import { getContributionAudit, getContributionBatches, getQuestions } from "../../../../lib/mongodb";
+import { getAdminSettings, getContributionAudit, getContributionBatches, getQuestions } from "../../../../lib/mongodb";
 import { hashQuestion, normalizeQuestion, questionTokens } from "../../../../lib/question-utils";
-
-function isReviewer(email: string) {
-  return (process.env.REVIEWER_EMAILS || "")
-    .split(",")
-    .map((item) => item.trim().toLowerCase())
-    .filter(Boolean)
-    .includes(email.toLowerCase());
-}
-
-async function requireReviewer() {
-  const session = await getServerSession(authOptions);
-  const email = session?.user?.email?.trim();
-  return email && isReviewer(email) ? email : null;
-}
+import { requireReviewerOrAdmin } from "../../../../lib/admin";
 
 export async function PATCH(
   req: NextRequest,
   context: { params: Promise<{ batchId: string }> },
 ) {
-  const reviewer = await requireReviewer();
+  const reviewer = await requireReviewerOrAdmin();
   if (!reviewer) return NextResponse.json({ error: "Reviewer access is required." }, { status: 403 });
   const { batchId } = await context.params;
   const body = await req.json().catch(() => null);
@@ -31,6 +16,8 @@ export async function PATCH(
   if (!batch) return NextResponse.json({ error: "Contribution batch not found." }, { status: 404 });
 
   const action = String(body?.action || "");
+  const configuredSettings = await (await getAdminSettings()).findOne({ _id: "global" });
+  const duplicateBlockThreshold = configuredSettings?.duplicateBlockThreshold ?? 0.9;
   if (action === "reject") {
     await (await getContributionAudit()).insertOne({
       batchId,
@@ -48,7 +35,7 @@ export async function PATCH(
     const index = Number(body?.index);
     const item = batch.items[index];
     if (!item) return NextResponse.json({ error: "A valid contribution item is required." }, { status: 400 });
-    if (action === "approve" && (item.preprocessingStatus === "failed" || item.exactDuplicate || item.similarityScore > 0.9)) {
+    if (action === "approve" && (item.preprocessingStatus === "failed" || item.exactDuplicate || item.similarityScore > duplicateBlockThreshold)) {
       return NextResponse.json({ error: "This contribution is blocked by preprocessing or duplicate checks." }, { status: 409 });
     }
     item.reviewStatus = action === "approve" ? "approved" : "rejected";
@@ -105,7 +92,7 @@ export async function PATCH(
   const indexes = Array.isArray(body?.indexes) ? body.indexes.map((value: unknown) => Number(value)).filter(Number.isInteger) : [];
   if (!indexes.length) return NextResponse.json({ error: "Select at least one contribution to publish." }, { status: 400 });
   const selected = indexes.map((index: number) => batch.items[index]).filter(Boolean);
-  if (selected.some((item: typeof batch.items[number]) => item.reviewStatus !== "approved" || item.preprocessingStatus === "failed" || item.exactDuplicate || item.similarityScore > 0.9)) {
+  if (selected.some((item: typeof batch.items[number]) => item.reviewStatus !== "approved" || item.preprocessingStatus === "failed" || item.exactDuplicate || item.similarityScore > duplicateBlockThreshold)) {
     return NextResponse.json({ error: "Only approved, successfully preprocessed, non-duplicate items can be published." }, { status: 409 });
   }
 
