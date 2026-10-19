@@ -34,9 +34,12 @@ function validateOutput(value: unknown, input: PreprocessInput): PreprocessedQue
     ? output.tags.filter((tag): tag is string => typeof tag === "string").map((tag) => tag.trim()).filter(Boolean).slice(0, 12)
     : [];
   const difficulty = typeof output.difficulty === "string" ? output.difficulty.trim() : "";
-  const status = output.preprocessingStatus === "needs_review" ? "needs_review" : "successful";
-  if (!question || question.length > 500 || !domain || !input.company) {
-    throw new Error("Preprocessing returned incomplete question metadata.");
+  const status =
+    output.preprocessingStatus === "needs_review" || !domain || !tags.length
+      ? "needs_review"
+      : "successful";
+  if (!question || question.length > 500 || !input.company) {
+    throw new Error("Preprocessing returned an incomplete question.");
   }
   return {
     originalText: input.originalText,
@@ -109,7 +112,9 @@ async function requestJson(system: string, user: string) {
 export async function preprocessQuestion(input: PreprocessInput) {
   const system = `You normalize interview questions into strict JSON. Return only an object with exactly these fields:
 {"question":"string","domain":"string","tags":["string"],"difficulty":"easy|medium|hard|","preprocessingStatus":"successful|needs_review"}
-Preserve meaning, fix grammar, and do not invent company, role, requirements, or facts. Use the supplied domain and tags when present. If the question is ambiguous, set preprocessingStatus to "needs_review" and make the safest faithful normalization.`;
+  Preserve meaning, fix grammar, and do not invent company, role, requirements, or facts. Company and role are metadata supplied by the user; never change them.
+  The supplied domain and tags are optional hints. When either is missing or empty, infer an appropriate domain and relevant topic tags from the question. Do not leave domain or tags empty unless the question is genuinely ambiguous.
+  If the question is genuinely ambiguous, set preprocessingStatus to "needs_review", preserve the safest faithful normalization, and provide your best metadata suggestions when possible.`;
   const user = JSON.stringify({
     originalText: input.originalText,
     company: input.company,

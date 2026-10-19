@@ -54,10 +54,18 @@ type ReviewBatch = {
   status: string;
   company: string;
   items: Array<{
+    originalText: string;
     question: string;
+    company: string;
+    role: string;
+    domain: string;
+    tags: string[];
+    difficulty?: string;
     exactDuplicate: boolean;
     similarityScore: number;
     preprocessingStatus: string;
+    reviewStatus?: "pending" | "approved" | "rejected";
+    reviewNote?: string;
     nearestMatch?: { question: string; company: string; score: number };
   }>;
 };
@@ -333,6 +341,7 @@ export default function InterviewStudio() {
   const [qs, setQs] = useState<Q[]>([]);
   const [questionBankError, setQuestionBankError] = useState("");
   const [contributeOpen, setContributeOpen] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
   const [contributionCompany, setContributionCompany] = useState("");
   const [contributionRole, setContributionRole] = useState("");
   const [contributionDomain, setContributionDomain] = useState("");
@@ -345,6 +354,9 @@ export default function InterviewStudio() {
   const [contributionResult, setContributionResult] = useState<{ batchId: string; status: string; items: Array<{ question: string; similarityScore: number; exactDuplicate: boolean; nearestMatch?: { question: string; company: string; score: number } }> } | null>(null);
   const [reviewBatches, setReviewBatches] = useState<ReviewBatch[]>([]);
   const [reviewLoading, setReviewLoading] = useState(false);
+  const [reviewSaving, setReviewSaving] = useState("");
+  const [selectedReviewBatch, setSelectedReviewBatch] = useState("");
+  const [reviewDrafts, setReviewDrafts] = useState<Record<string, ReviewBatch["items"][number]>>({});
   const companies = useMemo(
     () => unique(qs.map((question) => question.company)),
     [qs],
@@ -390,7 +402,7 @@ export default function InterviewStudio() {
     };
   }, []);
   useEffect(() => {
-    if (!contributeOpen || authStatus !== "authenticated") return;
+    if (!reviewOpen || authStatus !== "authenticated") return;
     setReviewLoading(true);
     fetch("/api/contributions?status=awaiting_review")
       .then(async (response) => {
@@ -399,7 +411,7 @@ export default function InterviewStudio() {
       })
       .catch(() => undefined)
       .finally(() => setReviewLoading(false));
-  }, [authStatus, contributeOpen]);
+  }, [authStatus, reviewOpen]);
   const domains = useMemo(
     () => unique(qs.flatMap((question) => question.domains ?? [])),
     [qs],
@@ -792,18 +804,47 @@ export default function InterviewStudio() {
     }
   }
 
-  async function reviewBatch(batchId: string, action: "publish" | "reject", indexes?: number[]) {
+  async function reviewBatch(
+    batchId: string,
+    action: "publish" | "reject" | "edit" | "approve" | "reject_item",
+    indexes?: number[],
+    index?: number,
+    draft?: ReviewBatch["items"][number],
+  ) {
+    const key = `${batchId}:${index ?? action}`;
+    setReviewSaving(key);
     const response = await fetch(`/api/contributions/${batchId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action, indexes }),
+      body: JSON.stringify({
+        action,
+        indexes,
+        index,
+        ...(index !== undefined && action === "edit"
+          ? draft || reviewDrafts[`${batchId}:${index}`]
+          : {}),
+      }),
     });
     const data = await response.json();
     if (!response.ok) {
       alert(data.error || "Unable to update contribution.");
+      setReviewSaving("");
       return;
     }
-    setReviewBatches((current) => current.filter((batch) => batch._id !== batchId));
+    if (action === "publish" || action === "reject") {
+      setReviewBatches((current) => current.filter((batch) => batch._id !== batchId));
+    } else {
+      setReviewBatches((current) => current.map((batch) => {
+        if (batch._id !== batchId || index === undefined || !data.item) return batch;
+        return {
+          ...batch,
+          items: data.deleted
+            ? batch.items.filter((_item, itemIndex) => itemIndex !== index)
+            : batch.items.map((item, itemIndex) => itemIndex === index ? data.item : item),
+        };
+      }).filter((batch) => batch.items.length > 0));
+    }
+    setReviewSaving("");
   }
 
   return (
@@ -859,7 +900,7 @@ export default function InterviewStudio() {
         <aside className="navigator-rail">
           <div className="sidebar-nav" aria-label="Primary navigation">
             <span className="sidebar-nav-label">WORKSPACE</span>
-            <button className={`sidebar-nav-item ${!contributeOpen ? "active" : ""}`} onClick={() => { setChatOpen(false); setContributeOpen(false); }}>
+            <button className={`sidebar-nav-item ${!contributeOpen && !reviewOpen ? "active" : ""}`} onClick={() => { setChatOpen(false); setContributeOpen(false); setReviewOpen(false); }}>
               <Network size={15} />
               <span>Question bank</span>
             </button>
@@ -867,6 +908,13 @@ export default function InterviewStudio() {
               <FileUp size={15} />
               <span>Contribute questions</span>
             </button>
+            {authStatus === "authenticated" && (
+              <button className={`sidebar-nav-item ${reviewOpen ? "active" : ""}`} onClick={() => { setChatOpen(false); setContributeOpen(false); setReviewOpen(true); }}>
+                <Clipboard size={15} />
+                <span>Review queue</span>
+                {reviewBatches.length > 0 && <span className="sidebar-nav-status" />}
+              </button>
+            )}
               <button
                 className="sidebar-nav-item"
                 onClick={openChat}
@@ -1307,31 +1355,89 @@ export default function InterviewStudio() {
               </div>
             </div>
           )}
-          {authStatus === "authenticated" && reviewBatches.length > 0 && (
-            <div className="contribution-result">
-              <strong>Reviewer queue</strong>
-              {reviewLoading ? <p>Loading review queue...</p> : reviewBatches.map((batch) => {
-                const publishable = batch.items
-                  .map((item, index) => ({ item, index }))
-                  .filter(({ item }) => item.preprocessingStatus !== "failed" && !item.exactDuplicate && item.similarityScore <= 0.9)
-                  .map(({ index }) => index);
-                return (
-                  <div className="contribution-items" key={batch._id}>
-                    <div>
-                      <span>{batch.company} · {batch.items.length} submissions</span>
-                      {batch.items.map((item, index) => (
-                        <p key={`${batch._id}-${index}`}>
-                          {index + 1}. {item.question} {item.exactDuplicate || item.similarityScore > 0.9 ? "(blocked duplicate)" : ""}
-                        </p>
-                      ))}
-                      <button className="export-button" onClick={() => void reviewBatch(batch._id, "publish", publishable)} disabled={!publishable.length}>
-                        Publish {publishable.length} safe item{publishable.length === 1 ? "" : "s"}
-                      </button>
-                      <button className="chat-close" onClick={() => void reviewBatch(batch._id, "reject")} aria-label="Reject contribution batch">Reject</button>
-                    </div>
-                  </div>
-                );
-              })}
+        </section>
+      )}
+      {reviewOpen && authStatus === "authenticated" && (
+        <section className="review-screen" aria-label="Contribution review queue">
+          <div className="review-header">
+            <div>
+              <span className="section-kicker">MODERATION WORKSPACE</span>
+              <h1>Review contributions</h1>
+              <p>Inspect every submission, correct its metadata, and approve only questions that are ready for the live question bank.</p>
+            </div>
+            <div className="review-summary">
+              <strong>{reviewBatches.length}</strong>
+              <span>pending batches</span>
+            </div>
+          </div>
+          {reviewLoading ? (
+            <div className="review-empty"><Loader2 className="spin" size={22} /> Loading review queue...</div>
+          ) : reviewBatches.length === 0 ? (
+            <div className="review-empty"><Clipboard size={28} /><strong>Queue is clear</strong><span>New contribution batches awaiting review will appear here.</span></div>
+          ) : (
+            <div className="review-layout">
+              <aside className="review-batches">
+                {reviewBatches.map((batch) => (
+                  <button
+                    key={batch._id}
+                    className={`review-batch ${selectedReviewBatch === batch._id ? "active" : ""}`}
+                    onClick={() => setSelectedReviewBatch(batch._id)}
+                  >
+                    <span>{batch.company}</span>
+                    <strong>{batch.items.length} question{batch.items.length === 1 ? "" : "s"}</strong>
+                    <small>{new Date().toLocaleDateString()}</small>
+                  </button>
+                ))}
+              </aside>
+              <div className="review-items">
+                {(reviewBatches.find((batch) => batch._id === (selectedReviewBatch || reviewBatches[0]?._id)) || reviewBatches[0]) && (() => {
+                  const batch = reviewBatches.find((item) => item._id === selectedReviewBatch) || reviewBatches[0];
+                  const publishable = batch.items
+                    .map((item, index) => ({ item, index }))
+                    .filter(({ item }) => item.reviewStatus === "approved" && item.preprocessingStatus !== "failed" && !item.exactDuplicate && item.similarityScore <= 0.9)
+                    .map(({ index }) => index);
+                  return (
+                    <>
+                      <div className="review-batch-heading">
+                        <div><span className="section-kicker">BATCH</span><h2>{batch.company}</h2><p>{batch.items.length} submitted questions · review each item before publishing</p></div>
+                        <div className="review-batch-actions">
+                          <button className="export-button" onClick={() => void reviewBatch(batch._id, "publish", publishable)} disabled={!publishable.length || reviewSaving === `${batch._id}:publish`}>{reviewSaving === `${batch._id}:publish` ? <Loader2 className="spin" size={15} /> : <Check size={15} />} Publish approved</button>
+                          <button className="review-reject-button" onClick={() => void reviewBatch(batch._id, "reject")} disabled={reviewSaving === `${batch._id}:reject`}>Reject batch</button>
+                        </div>
+                      </div>
+                      {batch.items.map((item, index) => {
+                        const draftKey = `${batch._id}:${index}`;
+                        const draft = reviewDrafts[draftKey] || item;
+                        const blocked = item.preprocessingStatus === "failed" || item.exactDuplicate || item.similarityScore > 0.9;
+                        return (
+                          <article className={`review-card ${item.reviewStatus === "approved" ? "approved" : item.reviewStatus === "rejected" ? "rejected" : ""}`} key={draftKey}>
+                            <div className="review-card-top">
+                              <div><span className="review-index">Q{index + 1}</span><span className={`review-status ${blocked ? "blocked" : item.reviewStatus || "pending"}`}>{blocked ? "Blocked" : item.reviewStatus || "Pending review"}</span></div>
+                              <span className="review-score">{item.exactDuplicate ? "Exact duplicate" : `Similarity ${(item.similarityScore * 100).toFixed(0)}%`}</span>
+                            </div>
+                            <div className="review-original"><span>ORIGINAL SUBMISSION</span><p>{item.originalText}</p></div>
+                            <div className="review-editor-grid">
+                              <label className="review-field-wide">Formatted question<textarea value={draft.question} onChange={(event) => setReviewDrafts((current) => ({ ...current, [draftKey]: { ...draft, question: event.target.value } }))} rows={3} /></label>
+                              <label>Company<input value={draft.company} onChange={(event) => setReviewDrafts((current) => ({ ...current, [draftKey]: { ...draft, company: event.target.value } }))} /></label>
+                              <label>Job role<input value={draft.role} onChange={(event) => setReviewDrafts((current) => ({ ...current, [draftKey]: { ...draft, role: event.target.value } }))} /></label>
+                              <label>Domain<input value={draft.domain} onChange={(event) => setReviewDrafts((current) => ({ ...current, [draftKey]: { ...draft, domain: event.target.value } }))} /></label>
+                              <label>Difficulty<select value={draft.difficulty || ""} onChange={(event) => setReviewDrafts((current) => ({ ...current, [draftKey]: { ...draft, difficulty: event.target.value } }))}><option value="">Not set</option><option value="easy">Easy</option><option value="medium">Medium</option><option value="hard">Hard</option></select></label>
+                              <label className="review-field-wide">Tags<input value={draft.tags.join(", ")} onChange={(event) => setReviewDrafts((current) => ({ ...current, [draftKey]: { ...draft, tags: event.target.value.split(",").map((tag) => tag.trim()).filter(Boolean) } }))} /></label>
+                            </div>
+                            {item.nearestMatch && <div className="review-match"><span>CLOSEST EXISTING MATCH · {item.nearestMatch.company} · {(item.nearestMatch.score * 100).toFixed(0)}%</span><p>{item.nearestMatch.question}</p></div>}
+                            {item.reviewNote && <div className="review-note">{item.reviewNote}</div>}
+                            <div className="review-card-actions">
+                              <button className="review-save" onClick={() => { setReviewDrafts((current) => ({ ...current, [draftKey]: draft })); void reviewBatch(batch._id, "edit", undefined, index, draft); }} disabled={!draft.question.trim() || !draft.company.trim() || reviewSaving === draftKey}>{reviewSaving === draftKey ? <Loader2 className="spin" size={14} /> : null} Save changes</button>
+                              <button className="review-approve" onClick={() => void reviewBatch(batch._id, "approve", undefined, index)} disabled={blocked || reviewSaving === `${batch._id}:${index}`}>Approve item</button>
+                              <button className="review-reject-item" onClick={() => void reviewBatch(batch._id, "reject_item", undefined, index)} disabled={reviewSaving === `${batch._id}:${index}`}>Reject item</button>
+                            </div>
+                          </article>
+                        );
+                      })}
+                    </>
+                  );
+                })()}
+              </div>
             </div>
           )}
         </section>

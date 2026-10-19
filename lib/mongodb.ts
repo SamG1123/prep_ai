@@ -70,6 +70,7 @@ export type ContributionItem = {
   tags: string[];
   difficulty?: string;
   preprocessingStatus: "successful" | "needs_review" | "failed";
+  reviewStatus?: "pending" | "approved" | "rejected";
   exactDuplicate: boolean;
   similarityScore: number;
   nearestMatch?: {
@@ -93,6 +94,17 @@ export type ContributionBatch = {
   createdAt: Date;
   updatedAt: Date;
   error?: string;
+};
+
+export type ContributionAudit = {
+  _id?: string;
+  batchId: string;
+  action: "published" | "rejected";
+  reviewerEmail: string;
+  company: string;
+  role: string;
+  items: ContributionItem[];
+  createdAt: Date;
 };
 
 type MongoState = {
@@ -167,5 +179,15 @@ export async function getContributionBatches(): Promise<Collection<ContributionB
   const collection = database.collection<ContributionBatch>("contribution_batches");
   await collection.createIndex({ status: 1, updatedAt: -1 });
   await collection.createIndex({ contributorId: 1, createdAt: -1 });
+  return collection;
+}
+
+export async function getContributionAudit(): Promise<Collection<ContributionAudit>> {
+  const state = getMongoState();
+  const client = await state.ready;
+  const database = client.db(process.env.MONGODB_DB_NAME || "prep_ai");
+  const collection = database.collection<ContributionAudit>("contribution_audit");
+  await collection.createIndex({ batchId: 1, createdAt: -1 });
+  await collection.createIndex({ createdAt: -1 });
   return collection;
 }

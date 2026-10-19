@@ -74,6 +74,7 @@ export async function POST(req: NextRequest) {
           ...normalized,
           exactDuplicate: false,
           similarityScore: 0,
+          reviewStatus: "pending",
         });
       } catch (error) {
         processed.push({
