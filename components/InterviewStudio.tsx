@@ -42,6 +42,12 @@ type Q = {
 type Style = "interviewee" | "normal" | "structured";
 type AnswerCache = Record<string, string>;
 type ChatMessage = { role: "user" | "assistant"; content: string };
+type ChatHistoryItem = {
+  id: string;
+  title: string;
+  context: string;
+  updatedAt: string;
+};
 
 const qs = questions as Q[];
 const ANSWER_CACHE_KEY = "prep-ai-answer-cache-v1";
@@ -281,6 +287,8 @@ export default function InterviewStudio() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatConversationId, setChatConversationId] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
+  const [chatHistory, setChatHistory] = useState<ChatHistoryItem[]>([]);
+  const [chatHistoryLoading, setChatHistoryLoading] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
   const [authView, setAuthView] = useState<"signin" | "signup">("signin");
   const [authName, setAuthName] = useState("");
@@ -308,6 +316,27 @@ export default function InterviewStudio() {
           normalize(question.domain).includes(term)),
     );
   }, [company, domain, search]);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated" || !chatOpen) return;
+    let cancelled = false;
+    setChatHistoryLoading(true);
+    fetch("/api/chat")
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Unable to load chat history.");
+        if (!cancelled) setChatHistory(data.conversations || []);
+      })
+      .catch((error) => {
+        if (!cancelled) console.error("Unable to load chat history.", error);
+      })
+      .finally(() => {
+        if (!cancelled) setChatHistoryLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [authStatus, chatOpen]);
 
   async function generate(question: Q, responseStyle: Style = style) {
     if (!selected || String(selected.sl_no) !== String(question.sl_no)) {
@@ -380,8 +409,47 @@ export default function InterviewStudio() {
   }
 
   function openChat() {
-    setChatConversationId((current) => current || window.crypto.randomUUID());
     setChatOpen(true);
+  }
+
+  function startNewChat() {
+    setChatConversationId("");
+    setChatMessages([]);
+    setChatInput("");
+    setChatOpen(true);
+  }
+
+  async function openPastChat(conversationId: string) {
+    setChatLoading(true);
+    try {
+      const response = await fetch(`/api/chat?conversationId=${encodeURIComponent(conversationId)}`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Unable to open conversation.");
+      setChatConversationId(data.conversation.id);
+      setChatMessages(data.conversation.messages.map((message: ChatMessage) => ({
+        role: message.role,
+        content: message.content,
+      })));
+      const matchingQuestion = qs.find(
+        (question) =>
+          question.question === data.conversation.question.text &&
+          question.company === data.conversation.question.company,
+      );
+      if (matchingQuestion) {
+        setSelected(matchingQuestion);
+        if (data.conversation.question.generatedAnswer) {
+          setAnswers((current) => ({
+            ...current,
+            [String(matchingQuestion.sl_no)]: data.conversation.question.generatedAnswer,
+          }));
+        }
+      }
+      setChatOpen(true);
+    } catch (error: any) {
+      alert(error.message);
+    } finally {
+      setChatLoading(false);
+    }
   }
 
   async function submitAuth(event: React.FormEvent<HTMLFormElement>) {
@@ -443,6 +511,15 @@ export default function InterviewStudio() {
         ...current,
         { role: "assistant", content: data.message },
       ]);
+      if (authStatus === "authenticated") {
+        try {
+          const historyResponse = await fetch("/api/chat");
+          const historyData = await historyResponse.json();
+          if (historyResponse.ok) setChatHistory(historyData.conversations || []);
+        } catch (error) {
+          console.error("Unable to refresh chat history.", error);
+        }
+      }
     } catch (error: any) {
       setChatMessages((current) => current.slice(0, -1));
       alert(error.message);
@@ -874,6 +951,39 @@ export default function InterviewStudio() {
                     </button>
                   </nav>
                   <div className="chat-screen-content">
+                    <aside className="chat-history" aria-label="Chat history">
+                      <button className="chat-new-button" onClick={startNewChat}>
+                        <MessageSquare size={15} />
+                        New chat
+                      </button>
+                      <div className="chat-history-heading">
+                        <span>Recent chats</span>
+                        {authStatus !== "authenticated" && <small>Sign in to save</small>}
+                      </div>
+                      {authStatus === "authenticated" ? (
+                        chatHistoryLoading ? (
+                          <div className="chat-history-empty">Loading history...</div>
+                        ) : chatHistory.length > 0 ? (
+                          <div className="chat-history-list">
+                            {chatHistory.map((conversation) => (
+                              <button
+                                className={`chat-history-item ${chatConversationId === conversation.id ? "active" : ""}`}
+                                key={conversation.id}
+                                onClick={() => void openPastChat(conversation.id)}
+                              >
+                                <strong>{conversation.title}</strong>
+                                <span>{conversation.context}</span>
+                              </button>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="chat-history-empty">Your saved conversations will appear here.</div>
+                        )
+                      ) : (
+                        <div className="chat-history-empty">Guest chats are available for this visit only and are never saved.</div>
+                      )}
+                    </aside>
+                    <div className="chat-conversation">
                     <div className="chat-header">
                       <div>
                         <strong>Question chat</strong>
@@ -938,6 +1048,7 @@ export default function InterviewStudio() {
                       Send
                     </button>
                   </form>
+                  </div>
                   </div>
                 </motion.section>
               )}

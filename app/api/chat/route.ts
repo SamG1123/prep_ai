@@ -96,6 +96,8 @@ async function requestProvider(messages: ChatMessage[], system: string) {
 
 export async function POST(req: NextRequest) {
   try {
+    const session = await getServerSession(authOptions);
+    const userId = session?.user?.email?.trim();
     const body = await req.json();
     const conversationId = String(body.conversationId || "").trim();
     const message = String(body.message || "").trim();
@@ -108,8 +110,6 @@ export async function POST(req: NextRequest) {
     if (!conversationId || !message) {
       return NextResponse.json({ error: "conversationId and message are required." }, { status: 400 });
     }
-    const session = await getServerSession(authOptions);
-    const userId = session?.user?.email?.trim() || `anonymous:${getClientHash(req, "anonymous")}`;
     if (message.length > MAX_MESSAGE_LENGTH) {
       return NextResponse.json({ error: `Keep each message under ${MAX_MESSAGE_LENGTH} characters.` }, { status: 413 });
     }
@@ -121,23 +121,25 @@ export async function POST(req: NextRequest) {
     let sessions: Awaited<ReturnType<typeof getChatSessions>> | undefined;
     let storageAvailable = true;
     let existing: ChatSession | null = null;
-    try {
-      sessions = await getChatSessions();
-      const rateLimits = await getChatRateLimits();
-      const rateKey = `${getClientHash(req, userId)}:${Math.floor(now / RATE_WINDOW_MS)}`;
-      await rateLimits.updateOne(
-        { _id: rateKey },
-        { $inc: { count: 1 }, $setOnInsert: { expiresAt: new Date(now + RATE_WINDOW_MS + 60_000) } },
-        { upsert: true },
-      );
-      const rateRecord = await rateLimits.findOne({ _id: rateKey });
-      if ((rateRecord?.count || 0) > RATE_LIMIT) {
-        return NextResponse.json({ error: "Chat rate limit reached. Please try again later." }, { status: 429 });
+    if (userId) {
+      try {
+        sessions = await getChatSessions();
+        const rateLimits = await getChatRateLimits();
+        const rateKey = `${getClientHash(req, userId)}:${Math.floor(now / RATE_WINDOW_MS)}`;
+        await rateLimits.updateOne(
+          { _id: rateKey },
+          { $inc: { count: 1 }, $setOnInsert: { expiresAt: new Date(now + RATE_WINDOW_MS + 60_000) } },
+          { upsert: true },
+        );
+        const rateRecord = await rateLimits.findOne({ _id: rateKey });
+        if ((rateRecord?.count || 0) > RATE_LIMIT) {
+          return NextResponse.json({ error: "Chat rate limit reached. Please try again later." }, { status: 429 });
+        }
+        existing = await sessions.findOne({ _id: conversationId, userId });
+      } catch (error) {
+        storageAvailable = false;
+        console.error("Chat persistence is unavailable; continuing without MongoDB storage.", error);
       }
-      existing = await sessions.findOne({ _id: conversationId, userId });
-    } catch (error) {
-      storageAvailable = false;
-      console.error("Chat persistence is unavailable; continuing without MongoDB storage.", error);
     }
     if (existing && existing.question.text !== question) {
       return NextResponse.json({ error: "This conversation is attached to a different question." }, { status: 409 });
@@ -165,7 +167,7 @@ Generated answer for context: ${generatedAnswer || "None yet"}`;
     ].slice(-MAX_HISTORY_MESSAGES).map((chatMessage) => ({ ...chatMessage, createdAt }));
     const expiresAt = new Date(now + 30 * 24 * 60 * 60 * 1000);
 
-    if (sessions) {
+    if (sessions && userId) {
       try {
         await sessions.updateOne(
           { _id: conversationId },
@@ -197,5 +199,50 @@ Generated answer for context: ${generatedAnswer || "None yet"}`;
   } catch (error: any) {
     const status = /MONGODB_URI is required/.test(error?.message || "") ? 503 : 500;
     return NextResponse.json({ error: error?.message || "Chat generation failed." }, { status });
+  }
+}
+
+export async function GET(req: NextRequest) {
+  const session = await getServerSession(authOptions);
+  const userId = session?.user?.email?.trim();
+  if (!userId) {
+    return NextResponse.json({ conversations: [] });
+  }
+
+  try {
+    const sessions = await getChatSessions();
+    const conversationId = req.nextUrl.searchParams.get("conversationId")?.trim();
+    if (conversationId) {
+      const conversation = await sessions.findOne({ _id: conversationId, userId });
+      if (!conversation) {
+        return NextResponse.json({ error: "Conversation not found." }, { status: 404 });
+      }
+      return NextResponse.json({
+        conversation: {
+          id: conversation._id,
+          title: conversation.question.text || "New chat",
+          question: conversation.question,
+          messages: conversation.messages,
+        },
+      });
+    }
+
+    const conversations = await sessions
+      .find({ userId })
+      .sort({ updatedAt: -1 })
+      .limit(50)
+      .project({ _id: 1, question: 1, messages: 1, updatedAt: 1 })
+      .toArray();
+    return NextResponse.json({
+      conversations: conversations.map((conversation) => ({
+        id: conversation._id,
+        title: conversation.question.text || conversation.messages.find((message: ChatMessage) => message.role === "user")?.content || "New chat",
+        context: conversation.question.company || conversation.question.domain || "General chat",
+        updatedAt: conversation.updatedAt,
+      })),
+    });
+  } catch (error) {
+    console.error("Unable to load chat history.", error);
+    return NextResponse.json({ error: "Unable to load chat history." }, { status: 503 });
   }
 }
