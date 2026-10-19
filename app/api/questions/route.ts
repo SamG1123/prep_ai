@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { ensureSeedQuestions } from "../../../lib/question-store";
+import seedQuestions from "../../../public/questions.json";
+import { ensureSeedQuestions, toPublicQuestion } from "../../../lib/question-store";
 import { getQuestions } from "../../../lib/mongodb";
-import { toPublicQuestion } from "../../../lib/question-store";
 
 export async function GET() {
   try {
@@ -12,7 +12,18 @@ export async function GET() {
       .toArray();
     return NextResponse.json({ questions: questions.map(toPublicQuestion) });
   } catch (error) {
-    console.error("Unable to load questions.", error);
-    return NextResponse.json({ error: "The question bank is temporarily unavailable." }, { status: 503 });
+    console.error("Unable to load questions from MongoDB; serving bundled question bank.", error);
+    return NextResponse.json({
+      questions: seedQuestions.map((question) => ({
+        sl_no: question.sl_no,
+        question: question.question,
+        company: question.company || "",
+        role: question.role || "",
+        domains: question.domains || [],
+        tags: [],
+        difficulty: "",
+      })),
+      persistence: "unavailable",
+    });
   }
 }

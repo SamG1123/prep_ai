@@ -110,7 +110,10 @@ function getMongoState() {
   if (!uri) throw new Error("MONGODB_URI is required for chat persistence.");
   if (global.prepAiMongo) return global.prepAiMongo;
 
-  const client = new MongoClient(uri);
+  const client = new MongoClient(uri, {
+    connectTimeoutMS: 5000,
+    serverSelectionTimeoutMS: 5000,
+  });
   const ready = client.connect();
   global.prepAiMongo = { client, ready };
   return global.prepAiMongo;
