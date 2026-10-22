@@ -872,9 +872,6 @@ export default function InterviewStudio() {
                       ),
                     )}
                   </div>
-                  <span className="engine-status">
-                    <span className="pulse-dot" /> Gemini answer engine
-                  </span>
                 </div>
               </div>
               <article className="answer-panel">
