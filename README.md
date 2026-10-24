@@ -36,3 +36,7 @@ This project is configured for static export, but AI generation needs a server/r
 
 ## PDF export
 The Export company PDF button generates and downloads a PDF directly. Cached answers are reused, and uncached requests are rate-limited across the two configured Groq PDF models.
+
+## How it looks?
+<img width="2796" height="1580" alt="image" src="https://github.com/user-attachments/assets/b5f69670-a19f-4874-93cb-061b0af01380" />
+
